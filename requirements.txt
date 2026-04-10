@@ -1,0 +1,28 @@
+# Essential dependencies for CycleDiffusion
+# Core ML
+transformers==4.19.2
+datasets
+pytorch-lightning==1.6.1
+torchmetrics==0.8.0
+torchdiffeq==0.2.3
+
+# Utilities
+wandb==0.12.15
+tqdm
+scipy
+numpy
+Pillow
+einops==0.4.1
+omegaconf==2.1.2
+kornia==0.6.4
+yacs==0.1.8
+imageio
+imageio-ffmpeg
+
+# Evaluation & Loss
+lpips==0.1.4
+clean-fid==0.1.23
+
+# System
+opencv-python
+psutil

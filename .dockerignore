@@ -1,0 +1,12 @@
+.git
+.gitignore
+ckpts/
+data/
+output/
+raw_data/
+stargan-v2/
+*.log
+*.pyc
+__pycache__/
+.env
+.ipynb_checkpoints/

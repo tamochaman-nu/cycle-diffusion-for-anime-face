@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: cyclediffusion:latest
+    container_name: cyclediffusion-container
+    volumes:
+      - .:/app
+    environment:
+      - CUDA_VISIBLE_DEVICES=0 # Default to GPU 0, can be overridden
+      - WANDB_API_KEY=${WANDB_API_KEY:-}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    ipc: host # Important for multiprocessing/DDP
+    stdin_open: true
+    tty: true
+    working_dir: /app
