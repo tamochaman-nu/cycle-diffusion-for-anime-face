@@ -31,9 +31,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Install CLIP from OpenAI
 RUN pip install git+https://github.com/openai/CLIP.git
 
-# Copy and install taming-transformers from the submodule
-COPY taming-transformers /opt/taming-transformers
-RUN pip install /opt/taming-transformers
+# Install taming-transformers
+RUN git clone https://github.com/CompVis/taming-transformers.git /opt/taming-transformers && \
+    cd /opt/taming-transformers && \
+    pip install -e .
 
 # Note: The project code is mounted via docker-compose for development.
 # If you want to build a standalone image, uncomment the following line:

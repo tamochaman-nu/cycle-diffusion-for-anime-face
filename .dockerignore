@@ -5,6 +5,7 @@ data/
 output/
 raw_data/
 stargan-v2/
+taming-transformers/
 *.log
 *.pyc
 __pycache__/

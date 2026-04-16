@@ -26,3 +26,4 @@ clean-fid==0.1.23
 # System
 opencv-python
 psutil
+protobuf==3.20.3

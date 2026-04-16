@@ -12,6 +12,8 @@ services:
     environment:
       - CUDA_VISIBLE_DEVICES=0 # Default to GPU 0, can be overridden
       - WANDB_API_KEY=${WANDB_API_KEY:-}
+      - RUN_NAME=translate_afhqcat256_to_afhqdog256_ddim_eta01
+      - SEED=42
     deploy:
       resources:
         reservations:
