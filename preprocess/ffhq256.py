@@ -1,4 +1,3 @@
-# Created by Chen Henry Wu
 import os
 import torch
 from datasets import DatasetDict
@@ -6,6 +5,11 @@ from torch.utils.data import Dataset
 import torchvision.transforms as transforms
 import torchvision.transforms.functional as TF
 from PIL import Image
+
+from utils.file_utils import list_image_files_recursively
+
+
+INTERPOLATION = TF.InterpolationMode.BILINEAR
 
 
 class Preprocessor(object):
@@ -15,7 +19,7 @@ class Preprocessor(object):
         self.meta_args = meta_args
 
     def preprocess(self, raw_datasets: DatasetDict, cache_root: str):
-        assert len(raw_datasets) == 3  # Not always.
+        assert len(raw_datasets) == 3
         train_dataset = TrainDataset(self.args, self.meta_args, raw_datasets['train'], cache_root)
         dev_dataset = DevDataset(self.args, self.meta_args, raw_datasets['validation'], cache_root)
 
@@ -40,37 +44,32 @@ class TrainDataset(Dataset):
 class DevDataset(Dataset):
 
     def __init__(self, args, meta_args, raw_datasets, cache_root):
-
-        self.root_dir = './data/images1024x1024'  # TODO
+        # Directory containing FFHQ test images (256x256 PNG/JPG).
+        # Populate ./data/ffhq_test/ with your face images before running.
+        self.root_dir = './data/ffhq_test'
         self.transform = transforms.Compose([
-            transforms.Resize(256),  # TODO: use the 256x256 version or follow the original processing.
+            transforms.Resize(256, interpolation=INTERPOLATION),
+            transforms.CenterCrop(256),
             transforms.ToTensor()
         ])
 
-        self.metas = []
-        # for i in range(1, 21):
-        for i in [1, 11, 15]:  # TODO
-        # for i in [15]:
-            self.metas.append(str(i).zfill(5) + '.png')
+        self.file_names = list_image_files_recursively(self.root_dir)
 
         self.data = [
             {
                 "sample_id": torch.LongTensor([idx]).squeeze(0),
-                "meta": meta,
+                "file_name": file_name,
                 "model_kwargs": ["sample_id", ]
             }
-            for idx, meta in enumerate(self.metas)
+            for idx, file_name in enumerate(self.file_names)
         ]
 
     def __getitem__(self, index):
         data = {k: v for k, v in self.data[index].items()}
 
-        # Add image.
-        filename = self.root_dir + '/' + data['meta']
-        img = Image.open(filename)
+        img = Image.open(data['file_name']).convert('RGB')
         img = self.transform(img)
 
-        # Add image.
         data['original_image'] = img
         data["model_kwargs"] = data["model_kwargs"] + ["original_image", ]
 

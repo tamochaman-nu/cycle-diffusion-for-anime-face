@@ -100,7 +100,7 @@ def create_model(
 
 
 def i_DDPM(dataset_name = 'AFHQ'):
-    if dataset_name in  ['AFHQ', 'FFHQ']:
+    if dataset_name in ['AFHQ', 'FFHQ', 'Anime']:
         return create_model(**AFHQ_DICT)
     elif dataset_name == 'IMAGENET':
         return create_model(**IMAGENET_DICT)

@@ -79,6 +79,14 @@ def prepare_ddpm_ddim(source_model_type, source_model_path):
                 '--model_path', 'ckpts/ddpm/church_outdoor.ckpt',
             ]
         )
+    elif source_model_type == 'anime256':
+        assert source_model_path is not None
+        ddim_args = parser.parse_args(
+            [
+                '--config', 'anime.yml',
+                '--model_path', source_model_path,
+            ]
+        )
     elif source_model_type == 'imagenet256':
         raise NotImplementedError()  # Find other checkpoints.
     elif source_model_type == 'imagenet512':
@@ -367,7 +375,7 @@ class DDPMDDIMWrapper(torch.nn.Module):
             else:
                 raise ValueError()
             print("Original diffusion Model loaded.")
-        elif config.data.dataset in ["FFHQ", "AFHQ", "IMAGENET"]:
+        elif config.data.dataset in ["FFHQ", "AFHQ", "IMAGENET", "Anime"]:
             self.generator = i_DDPM(config.data.dataset)
             self.learn_sigma = False
             self.logvar = np.log(np.maximum(posterior_variance, 1e-20))

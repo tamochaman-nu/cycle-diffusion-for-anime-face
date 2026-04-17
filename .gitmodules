@@ -1,0 +1,6 @@
+[submodule "stargan-v2"]
+	path = stargan-v2
+	url = https://github.com/clovaai/stargan-v2.git
+[submodule "opt/taminig-transformers"]
+	path = opt/taminig-transformers
+	url = https://github.com/CompVis/taming-transformers.git

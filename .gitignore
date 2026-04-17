@@ -134,3 +134,5 @@ Temporary Items
 **/.idea/**/*
 
 ckpts/*
+data/*
+output/*

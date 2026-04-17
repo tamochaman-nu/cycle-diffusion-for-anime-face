@@ -75,5 +75,5 @@ class DevDataset(Dataset):
         return data
 
     def __len__(self):
-        return len(self.data)
-        # return 4
+        # return len(self.data)  # Full dataset (493 images)
+        return 4  # Limit for quick testing

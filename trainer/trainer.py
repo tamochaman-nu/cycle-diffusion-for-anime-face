@@ -349,7 +349,8 @@ class Trainer:
         self.state.log_history.append(output)
 
         # wandb
-        wandb.log(logs)
+        if wandb.run is not None:
+            wandb.log(logs)
 
     def is_local_process_zero(self) -> bool:
         """
@@ -863,6 +864,10 @@ class Trainer:
         # samplers has been rounded to a multiple of batch_size, so we truncate.
         if all_prediction_outputs is not None:
             all_prediction_outputs = nested_truncate(all_prediction_outputs, num_samples)
+
+        if all_prediction_outputs is None:
+            logger.warning("No evaluation examples found. Skipping evaluation.")
+            return {}, 0
 
         images, weighted_loss, losses = all_prediction_outputs
 
