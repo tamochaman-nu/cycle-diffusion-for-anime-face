@@ -73,7 +73,8 @@ def main():
     # cudnn.deterministic = True
 
     # Set up wandb.
-    wandb_run_dir = setup_wandb(training_args)
+    # wandb_run_dir = setup_wandb(training_args)
+    wandb_run_dir = None
     # Setup output directory.
     os.makedirs(training_args.output_dir, exist_ok=True)
     args.output_dir = training_args.output_dir

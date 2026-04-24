@@ -56,11 +56,12 @@ def prepare_ddpm_ddim(source_model_type, source_model_path):
             ]
         )
     elif source_model_type == 'ffhq256':
-        assert source_model_path is None
+        if source_model_path is None:
+            source_model_path = 'ckpts/ddpm/ffhq_10m.pt'
         ddim_args = parser.parse_args(
             [
                 '--config', 'ffhq.yml',
-                '--model_path', 'ckpts/ddpm/ffhq_10m.pt',
+                '--model_path', source_model_path,
             ]
         )
     elif source_model_type == 'bedroom256':

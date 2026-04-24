@@ -825,7 +825,9 @@ class Trainer:
         # Will be useful when we have an iterable dataset so don't know its length.
 
         # Main evaluation loop
+        num_batches = len(dataloader)
         for step, inputs in tqdm(enumerate(dataloader)):
+            logger.info(f"Processing image {step + 1}/{num_batches}")
             # Prediction step
             prediction_outputs = self.prediction_step(inputs)
 

@@ -22,6 +22,46 @@ AFHQ_DICT = dict(
 )
 
 
+FFHQ_DICT = dict(
+    attention_resolutions="16,8",
+    class_cond=False,
+    dropout=0.0,
+    image_size=256,
+    learn_sigma=True,
+    num_channels=128,
+    num_head_channels=64,
+    num_res_blocks=2,
+    resblock_updown=False,
+    use_fp16=False,
+    use_scale_shift_norm=True,
+    num_heads=4,
+    num_heads_upsample=-1,
+    channel_mult="",
+    use_checkpoint=False,
+    use_new_attention_order=False,
+)
+
+
+ANIME_DICT = dict(
+    attention_resolutions="16,8",  # with image_size=512: attention_ds=[32,64] → 8x8 and 4x4 for 256 input
+    class_cond=False,
+    dropout=0.0,
+    image_size=512,  # gives channel_mult=(0.5,1,1,2,2,4,4) → channels [64,128,128,256,256,512,512]
+    learn_sigma=True,
+    num_channels=128,
+    num_head_channels=64,
+    num_res_blocks=2,
+    resblock_updown=False,
+    use_fp16=False,
+    use_scale_shift_norm=True,
+    num_heads=4,
+    num_heads_upsample=-1,
+    channel_mult="",
+    use_checkpoint=False,
+    use_new_attention_order=False,
+)
+
+
 IMAGENET_DICT = dict(
     attention_resolutions="32,16,8",
     class_cond=True,
@@ -100,8 +140,12 @@ def create_model(
 
 
 def i_DDPM(dataset_name = 'AFHQ'):
-    if dataset_name in ['AFHQ', 'FFHQ', 'Anime']:
+    if dataset_name in ['AFHQ']:
         return create_model(**AFHQ_DICT)
+    elif dataset_name == 'FFHQ':
+        return create_model(**FFHQ_DICT)
+    elif dataset_name == 'Anime':
+        return create_model(**ANIME_DICT)
     elif dataset_name == 'IMAGENET':
         return create_model(**IMAGENET_DICT)
     else:

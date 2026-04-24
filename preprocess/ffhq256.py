@@ -44,16 +44,17 @@ class TrainDataset(Dataset):
 class DevDataset(Dataset):
 
     def __init__(self, args, meta_args, raw_datasets, cache_root):
-        # Directory containing FFHQ test images (256x256 PNG/JPG).
-        # Populate ./data/ffhq_test/ with your face images before running.
-        self.root_dir = './data/ffhq_test'
+        preprocess_cfg = getattr(args, 'preprocess', args)
+        self.root_dir = getattr(preprocess_cfg, 'ffhq_data_root', None) or './data/ffhq_test'
         self.transform = transforms.Compose([
             transforms.Resize(256, interpolation=INTERPOLATION),
             transforms.CenterCrop(256),
             transforms.ToTensor()
         ])
 
-        self.file_names = list_image_files_recursively(self.root_dir)
+        all_files = list_image_files_recursively(self.root_dir)
+        num_samples = getattr(preprocess_cfg, 'num_samples', None)
+        file_names = all_files[:num_samples] if num_samples else all_files
 
         self.data = [
             {
@@ -61,7 +62,7 @@ class DevDataset(Dataset):
                 "file_name": file_name,
                 "model_kwargs": ["sample_id", ]
             }
-            for idx, file_name in enumerate(self.file_names)
+            for idx, file_name in enumerate(file_names)
         ]
 
     def __getitem__(self, index):
