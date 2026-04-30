@@ -23,15 +23,15 @@ AFHQ_DICT = dict(
 
 
 FFHQ_DICT = dict(
-    attention_resolutions="16,8",
+    attention_resolutions="16",
     class_cond=False,
     dropout=0.0,
     image_size=256,
     learn_sigma=True,
     num_channels=128,
     num_head_channels=64,
-    num_res_blocks=2,
-    resblock_updown=False,
+    num_res_blocks=1,
+    resblock_updown=True,
     use_fp16=False,
     use_scale_shift_norm=True,
     num_heads=4,
@@ -43,14 +43,14 @@ FFHQ_DICT = dict(
 
 
 ANIME_DICT = dict(
-    attention_resolutions="16,8",  # with image_size=512: attention_ds=[32,64] → 8x8 and 4x4 for 256 input
+    attention_resolutions="16,8",
     class_cond=False,
     dropout=0.0,
-    image_size=512,  # gives channel_mult=(0.5,1,1,2,2,4,4) → channels [64,128,128,256,256,512,512]
+    image_size=256,
     learn_sigma=True,
     num_channels=128,
     num_head_channels=64,
-    num_res_blocks=2,
+    num_res_blocks=1,
     resblock_updown=False,
     use_fp16=False,
     use_scale_shift_norm=True,

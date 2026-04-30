@@ -60,6 +60,13 @@ Here are some comparisons with baselines.
   - [Updates](#updates)
   - [Overview](#overview)
   - [Contents](#contents)
+  - [Anime Face Translation (Fork Modifications)](#anime-face-translation-fork-modifications)
+    - [Checkpoints](#checkpoints)
+    - [Standalone Inference](#standalone-inference)
+    - [Docker Compose](#docker-compose)
+    - [main.py with HuggingFace Trainer](#mainpy-with-huggingface-trainer)
+    - [Inference Improvement Techniques](#inference-improvement-techniques)
+    - [All New CLI Arguments](#all-new-cli-arguments)
   - [Dependencies](#dependencies)
   - [Evaluation data](#evaluation-data)
   - [Pre-trained diffusion models](#pre-trained-diffusion-models)
@@ -72,6 +79,136 @@ Here are some comparisons with baselines.
   - [License](#license)
   - [Contact](#contact)
 
+
+## Anime Face Translation (Fork Modifications)
+
+This fork extends CycleDiffusion to translate real human face photos into anime-style portraits using pixel-space DDPM models (FFHQ256 → Anime256). It adds four inference improvement techniques to reduce structural collapse, a standalone `inference.py` script, and Docker Compose integration.
+
+### Checkpoints
+
+Place DDPM checkpoint files under `ckpts/ddpm/`:
+
+```
+ckpts/ddpm/
+  ffhq070000.pt    # FFHQ 256x256 DDPM (source model)
+  anime030000.pt   # Anime face 256x256 DDPM (target model)
+```
+
+The FFHQ checkpoint can be obtained from the [ILVR repository](https://github.com/jychoi118/ilvr_adm). The anime face checkpoint is trained separately on an anime face dataset.
+
+### Standalone Inference
+
+`inference.py` runs a single image through the full encode→decode pipeline without the HuggingFace Trainer overhead:
+
+```shell
+python inference.py \
+  --source_image /path/to/photo.jpg \
+  --source_model_type ffhq256 \
+  --source_model_path ckpts/ddpm/ffhq070000.pt \
+  --target_model_type anime256 \
+  --target_model_path ckpts/ddpm/anime030000.pt \
+  --num_inference_steps 1000 \
+  --es_steps 850 \
+  --eta 0.01 \
+  --use_freeinv True \
+  --freeinv_seed 42 \
+  --taba_ratio 0.2 \
+  --use_fbsdiff True \
+  --fbsdiff_cutoff 0.3 \
+  --output_path output/result.png
+```
+
+Two files are saved: `output/result.png` (translated image) and `output/result_comparison.png` (source and translated side-by-side).
+
+### Docker Compose
+
+The project runs inside Docker. Two services are defined in `docker-compose.yml`:
+
+- **`app`** — Production run using NAS data
+- **`app-local`** — Local test run using data in `data/local_test/`
+
+```shell
+# Run local test
+docker compose run --rm app-local
+
+# Run production
+docker compose run --rm app
+```
+
+Both services invoke `inference.py` with pre-configured arguments. Edit `docker-compose.yml` to adjust flags such as `--eta`, `--use_freeinv`, `--taba_ratio`, etc.
+
+### main.py with HuggingFace Trainer
+
+For batch evaluation over a dataset, use `main.py` with a config file. The new CLI flags override the corresponding values in the `.cfg` file:
+
+```shell
+python main.py \
+  --cfg config/experiments/translate_ffhq_test256_to_anime256_ddim_eta01.cfg \
+  --output_dir output/ffhq_to_anime \
+  --do_eval \
+  --per_device_eval_batch_size 1 \
+  --eta 0.01 \
+  --use_freeinv True \
+  --freeinv_seed 42 \
+  --taba_ratio 0.2 \
+  --use_fbsdiff True \
+  --fbsdiff_cutoff 0.3
+```
+
+### Inference Improvement Techniques
+
+Four techniques are implemented to address structural collapse (wrong face position or composition) that can occur when the source and target DDPM trajectories diverge.
+
+#### FreeInv
+
+Applies random invertible spatial transforms (rotations and flips) to intermediate latents during DDIM inversion and generation. The same transform sequence is reproduced in the target model's generation pass via a shared seed, reducing systematic per-step accumulation error.
+
+Controlled by `--use_freeinv` and `--freeinv_seed`.
+
+#### TABA (Timestep-Adaptive Blank Attention)
+
+Replaces the first `taba_ratio` fraction of inversion steps with forward diffusion (i.e., adds noise without computing the error trajectory). This improves inversion accuracy at high noise levels where the DDIM assumption is less reliable.
+
+Controlled by `--taba_ratio` (e.g., `0.2` means the first 20% of steps use forward diffusion).
+
+#### FBSDiff (Frequency Band Substitution Diffusion)
+
+During target generation, substitutes the low-frequency components of each intermediate latent with the corresponding low-frequency components from the source inversion trajectory. This injects global structure (face position, pose) from the source while preserving the target domain's high-frequency details (style, texture).
+
+Implemented in `model/fbsdiff_guidance.py`. Controlled by `--use_fbsdiff`, `--fbsdiff_cutoff`, `--fbsdiff_start_step`, `--fbsdiff_end_step`, and `--fbsdiff_cache_every`.
+
+#### SimInversion
+
+Uses `source_guidance_scale=1.0` during inversion. This is a no-op for unconditional DDPM models but ensures consistent inversion behavior for text-conditioned models.
+
+Controlled by `--use_siminversion`, `--source_guidance_scale`, and `--target_guidance_scale`.
+
+### All New CLI Arguments
+
+The following arguments are available in both `inference.py` and `main.py`:
+
+| Argument | Type | Default | Description |
+|---|---|---|---|
+| `--eta` | float | `0.01` | DDIM stochasticity (0 = deterministic, 1 = DDPM). Lower values improve consistency. |
+| `--use_freeinv` | bool | `True` | Enable FreeInv random invertible transforms during inversion/generation. |
+| `--freeinv_seed` | int | `42` | RNG seed for FreeInv transform sequence (must be identical for encode and generate). |
+| `--use_siminversion` | bool | `False` | Enable SimInversion (fixes guidance scale at 1.0 during inversion). |
+| `--source_guidance_scale` | float | `1.0` | Guidance scale for inversion (SimInversion). Unconditional DDPM ignores this. |
+| `--target_guidance_scale` | float | `1.0` | Guidance scale for generation (SimInversion). Unconditional DDPM ignores this. |
+| `--taba_ratio` | float | `0.2` | Fraction of inversion steps (from t=T) replaced by forward diffusion (0.0–1.0). |
+| `--use_fbsdiff` | bool | `True` | Enable FBSDiff frequency band substitution during generation. |
+| `--fbsdiff_cutoff` | float | `0.3` | Low/high frequency boundary as a fraction of spatial resolution (0.1–0.5 recommended). |
+| `--fbsdiff_start_step` | int | `0` | Generation step index at which FBSDiff begins. |
+| `--fbsdiff_end_step` | int | `30` | Generation step index at which FBSDiff ends. |
+| `--fbsdiff_cache_every` | int | `1` | Cache source inversion latents every N steps (increase to reduce memory usage). |
+| `--save_intermediate` | bool | `False` | Save intermediate latents as images for debugging structural collapse. |
+| `--intermediate_dir` | str | `./debug` | Directory to save intermediate debug images. |
+
+For `main.py` only:
+
+| Argument | Type | Default | Description |
+|---|---|---|---|
+| `--guidance_scale` | float | `None` | Overrides `unconditional_guidance_scale` in config (text-conditioned models only). |
 
 ## Dependencies
 

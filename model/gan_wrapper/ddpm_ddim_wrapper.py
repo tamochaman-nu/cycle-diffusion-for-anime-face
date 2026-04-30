@@ -326,7 +326,18 @@ def sample_xt(x0, t, b):
 class DDPMDDIMWrapper(torch.nn.Module):
 
     def __init__(self, source_model_type, sample_type, custom_steps, es_steps, source_model_path=None,
-                 refine_steps=0, refine_iterations=1, eta=None, t_0=None, enforce_class_input=None):
+                 refine_steps=0, refine_iterations=1, eta=None, t_0=None, enforce_class_input=None,
+                 # FreeInv
+                 use_freeinv=False, freeinv_seed=None,
+                 # SimInversion (unconditional DDPM では guidance scale は使用されないが将来の拡張のために保持)
+                 use_siminversion=False, source_guidance_scale=1.0, target_guidance_scale=None,
+                 # TABA
+                 taba_ratio=0.0,
+                 # FBSDiff
+                 use_fbsdiff=False, fbsdiff_cutoff=0.3,
+                 fbsdiff_start_step=0, fbsdiff_end_step=30, fbsdiff_cache_every=1,
+                 # 中間出力の保存
+                 save_intermediate=False, intermediate_dir='./debug'):
         super(DDPMDDIMWrapper, self).__init__()
 
         self.enforce_class_input = enforce_class_input
@@ -337,6 +348,24 @@ class DDPMDDIMWrapper(torch.nn.Module):
         self.eta = eta
         self.t_0 = t_0 if t_0 is not None else 999
         self.es_steps = es_steps
+
+        # 新規パラメータ
+        self.use_freeinv = use_freeinv
+        self.freeinv_seed = freeinv_seed
+        self.use_siminversion = use_siminversion
+        self.source_guidance_scale = source_guidance_scale
+        self.target_guidance_scale = target_guidance_scale
+        self.taba_steps = max(0, int(es_steps * taba_ratio))
+        self.use_fbsdiff = use_fbsdiff
+        self.fbsdiff_cutoff = fbsdiff_cutoff
+        self.fbsdiff_start_step = fbsdiff_start_step
+        self.fbsdiff_end_step = fbsdiff_end_step
+        self.fbsdiff_cache_every = fbsdiff_cache_every
+        self.save_intermediate = save_intermediate
+        self.intermediate_dir = intermediate_dir
+
+        # inversion 後に FBSDiff 用の latent を格納するキャッシュ
+        self._inversion_latents = {}
 
         if self.sample_type == 'ddim':
             assert self.eta > 0
@@ -398,19 +427,58 @@ class DDPMDDIMWrapper(torch.nn.Module):
             [transforms.Normalize(mean=[-1.0, -1.0, -1.0], std=[2.0, 2.0, 2.0])]
         )
 
-    def generate(self, z, class_label):
+    # ------------------------------------------------------------------
+    # ユーティリティ
+    # ------------------------------------------------------------------
+
+    def _build_seq_inv(self):
         if (self.t_0 + 1) % self.custom_steps == 0:
-            seq_inv = range(0, self.t_0 + 1, (self.t_0 + 1) // self.custom_steps)
-            assert len(seq_inv) == self.custom_steps
+            seq_inv = list(range(0, self.t_0 + 1, (self.t_0 + 1) // self.custom_steps))
         else:
-            seq_inv = np.linspace(0, 1, self.custom_steps) * self.t_0
-        seq_inv = [int(s) for s in list(seq_inv)][:self.es_steps]  # 0, 1, ..., t_0
-        seq_inv_next = ([-1] + list(seq_inv[:-1]))[:self.es_steps]  # -1, 0, 1, ..., t_0-1
+            seq_inv = [int(s) for s in list(np.linspace(0, 1, self.custom_steps) * self.t_0)]
+        seq_inv = seq_inv[:self.es_steps]
+        seq_inv_next = ([-1] + seq_inv[:-1])[:self.es_steps]
+        return seq_inv, seq_inv_next
+
+    def _save_image(self, x, tag, step=None):
+        """latent x ([-1,1]) を画像としてデバッグ用ディレクトリに保存する。"""
+        import os
+        from torchvision.utils import save_image
+        os.makedirs(self.intermediate_dir, exist_ok=True)
+        fname = f"{tag}" + (f"_step{step:04d}" if step is not None else "") + ".png"
+        img = self.post_process(x.clone().cpu())
+        save_image(img, os.path.join(self.intermediate_dir, fname))
+
+    # ------------------------------------------------------------------
+    # generate
+    # ------------------------------------------------------------------
+
+    def generate(self, z, class_label, inversion_latents=None):
+        seq_inv, seq_inv_next = self._build_seq_inv()
 
         bsz = z.shape[0]
         eps_list = z.view(bsz, self.es_steps, self.channels, self.resolution, self.resolution)
         x_T = eps_list[:, 0]
         eps_list = eps_list[:, 1:]
+
+        # FreeInv: generate 側で encode と同一変換列を再現
+        if self.use_freeinv:
+            from ..freeinv import FreeInvDDIMInverter
+            gen_inverter = FreeInvDDIMInverter(use_freeinv=True, seed=self.freeinv_seed)
+            gen_inverter.generate_sequence(self.es_steps - 1)
+            print(f"[FreeInv] generate: sequence length={len(gen_inverter.transform_sequence)}")
+        else:
+            gen_inverter = None
+
+        # FBSDiff
+        if self.use_fbsdiff and inversion_latents:
+            from ..fbsdiff_guidance import frequency_band_substitution
+            print(f"[FBSDiff] enabled: cutoff={self.fbsdiff_cutoff}, "
+                  f"steps={self.fbsdiff_start_step}-{self.fbsdiff_end_step}")
+
+        # 中間保存のチェックポイント（全ステップ数に対する割合）
+        total_steps = self.es_steps - 1
+        save_checkpoints = {int(total_steps * r) for r in (0.1, 0.25, 0.5, 0.75, 1.0)}
 
         x = x_T
         if self.enforce_class_input:
@@ -421,31 +489,55 @@ class DDPMDDIMWrapper(torch.nn.Module):
                 t = (torch.ones(bsz) * i).to(self.device)
                 t_next = (torch.ones(bsz) * j).to(self.device)
 
+                # --- FBSDiff: ソース latent の低周波成分を注入 ---
+                if (self.use_fbsdiff and inversion_latents is not None
+                        and self.fbsdiff_start_step <= it <= self.fbsdiff_end_step):
+                    src_xt = inversion_latents.get(it)
+                    if src_xt is not None:
+                        x = frequency_band_substitution(
+                            src_xt.to(x.device), x,
+                            cutoff_ratio=self.fbsdiff_cutoff,
+                        )
+
+                # --- FreeInv: T 空間へ変換 ---
+                if gen_inverter is not None:
+                    x_in = gen_inverter.generation_step_forward(x, it)
+                else:
+                    x_in = x
+
                 if it < self.es_steps - 1:
                     eps = eps_list[:, it]
-                    x = denoising_step_with_eps(x, eps=eps, t=t, t_next=t_next, models=self.generator,
-                                                logvars=self.logvar,
-                                                sampling_type=self.sample_type,
-                                                b=self.betas,
-                                                eta=self.eta,
-                                                learn_sigma=self.learn_sigma)
+                    x_out = denoising_step_with_eps(
+                        x_in, eps=eps, t=t, t_next=t_next,
+                        models=self.generator, logvars=self.logvar,
+                        sampling_type=self.sample_type, b=self.betas,
+                        eta=self.eta, learn_sigma=self.learn_sigma,
+                    )
                 else:
-                    x = denoising_step(x, t=t, t_next=t_next, models=self.generator,
-                                       logvars=self.logvar,
-                                       sampling_type=self.sample_type,
-                                       b=self.betas,
-                                       eta=self.eta,
-                                       learn_sigma=self.learn_sigma)
+                    x_out = denoising_step(
+                        x_in, t=t, t_next=t_next,
+                        models=self.generator, logvars=self.logvar,
+                        sampling_type=self.sample_type, b=self.betas,
+                        eta=self.eta, learn_sigma=self.learn_sigma,
+                    )
+
+                # --- FreeInv: 元空間へ戻す ---
+                if gen_inverter is not None:
+                    x = gen_inverter.generation_step(x_out, it)
+                else:
+                    x = x_out
+
+                # --- 中間画像の保存 ---
+                if self.save_intermediate and it in save_checkpoints:
+                    self._save_image(x, tag="generate", step=it)
 
             if self.refine_steps == 0:
                 img = x
             else:
                 for r in range(self.refine_iterations):
                     refine_eta = 1
-                    # Sample xt
                     t = (torch.ones(bsz) * self.refine_steps - 1).to(self.device)
                     xt = sample_xt(x0=x, t=t, b=self.betas)
-                    # Denoise
                     x = xt
                     assert self.refine_steps < self.custom_steps
                     seq_inv_refine = seq_inv[:self.refine_steps]
@@ -453,92 +545,127 @@ class DDPMDDIMWrapper(torch.nn.Module):
                     for i, j in zip(reversed(seq_inv_refine), reversed(seq_inv_next_refine)):
                         t = (torch.ones(bsz) * i).to(self.device)
                         t_next = (torch.ones(bsz) * j).to(self.device)
-                        x = denoising_step(x, t=t, t_next=t_next, models=self.generator,
-                                           logvars=self.logvar,
-                                           sampling_type=self.sample_type,
-                                           b=self.betas,
-                                           eta=refine_eta,
-                                           learn_sigma=self.learn_sigma)
+                        x = denoising_step(
+                            x, t=t, t_next=t_next,
+                            models=self.generator, logvars=self.logvar,
+                            sampling_type=self.sample_type, b=self.betas,
+                            eta=refine_eta, learn_sigma=self.learn_sigma,
+                        )
                 img = x
 
         return img
 
-    def encode(self, image, class_label=None):
-        # Eval mode for the generator.
-        self.generator.eval()
+    # ------------------------------------------------------------------
+    # encode
+    # ------------------------------------------------------------------
 
-        if (self.t_0 + 1) % self.custom_steps == 0:
-            seq_inv = range(0, self.t_0 + 1, (self.t_0 + 1) // self.custom_steps)
-            assert len(seq_inv) == self.custom_steps
-        else:
-            seq_inv = np.linspace(0, 1, self.custom_steps) * self.t_0
-        seq_inv = [int(s) for s in list(seq_inv)][:self.es_steps]
-        seq_inv_next = ([-1] + list(seq_inv[:-1]))[:self.es_steps]
+    def encode(self, image, class_label=None):
+        self.generator.eval()
+        self._inversion_latents = {}
+
+        seq_inv, seq_inv_next = self._build_seq_inv()
 
         # Normalize.
         image = (image - 0.5) * 2.0
-        # Resize.
         assert image.shape[2] == image.shape[3] == self.resolution
+
+        # FreeInv: encode 側のインバーター（シードから変換列を生成）
+        if self.use_freeinv:
+            from ..freeinv import FreeInvDDIMInverter
+            enc_inverter = FreeInvDDIMInverter(use_freeinv=True, seed=self.freeinv_seed)
+            print(f"[FreeInv] encode: enabled (seed={self.freeinv_seed})")
+        else:
+            enc_inverter = None
+
+        if self.taba_steps > 0:
+            print(f"[TABA] skipping first {self.taba_steps} inversion steps "
+                  f"(taba_ratio={self.taba_steps / self.es_steps:.2f})")
 
         with torch.no_grad():
             x0 = image
             bsz = x0.shape[0]
 
-            # DPM-Encoder.
             if self.enforce_class_input:
                 assert class_label is not None
                 raise NotImplementedError()
-            else:
-                T = (torch.ones(bsz) * (self.es_steps - 1)).to(self.device)
-                xT = sample_xt(x0=x0, t=T, b=self.betas)
-                z_list = [xT, ]
 
-                xt = xT
-                for it, (i, j) in enumerate(zip(reversed(seq_inv), reversed(seq_inv_next))):
-                    t = (torch.ones(bsz) * i).to(self.device)
-                    t_next = (torch.ones(bsz) * j).to(self.device)
+            T = (torch.ones(bsz) * (self.es_steps - 1)).to(self.device)
+            xT = sample_xt(x0=x0, t=T, b=self.betas)
+            z_list = [xT]
 
-                    if it < self.es_steps - 1:
-                        xt_next = sample_xt_next(
-                            x0=x0,
-                            xt=xt,
-                            t=t,
-                            t_next=t_next,
-                            sampling_type=self.sample_type,
-                            b=self.betas,
-                            eta=self.eta,
-                        )
-                        eps = compute_eps(
-                            xt=xt,
-                            xt_next=xt_next,
-                            t=t,
-                            t_next=t_next,
-                            models=self.generator,
-                            sampling_type=self.sample_type,
-                            b=self.betas,
-                            logvars=self.logvar,
-                            eta=self.eta,
-                            learn_sigma=self.learn_sigma,
-                        )
-                        print(it, (eps ** 2).sum().item())
-                        xt = xt_next
-                        z_list.append(eps)
-                    else:
-                        break
+            # 中間保存: 元画像と xT
+            if self.save_intermediate:
+                self._save_image(x0, tag="encode_x0")
+                self._save_image(xT, tag="encode_xT")
+
+            xt = xT
+            for it, (i, j) in enumerate(zip(reversed(seq_inv), reversed(seq_inv_next))):
+                t = (torch.ones(bsz) * i).to(self.device)
+                t_next = (torch.ones(bsz) * j).to(self.device)
+
+                if it >= self.es_steps - 1:
+                    break
+
+                # FBSDiff 用に inversion latent を保存
+                if self.use_fbsdiff and (it % self.fbsdiff_cache_every == 0):
+                    self._inversion_latents[it] = xt.cpu()
+
+                # TABA: 最初の taba_steps ステップはゼロ eps を記録して進める
+                if it < self.taba_steps:
+                    xt_next = sample_xt_next(
+                        x0=x0, xt=xt, t=t, t_next=t_next,
+                        sampling_type=self.sample_type, b=self.betas, eta=self.eta,
+                    )
+                    z_list.append(torch.zeros_like(xt))
+                    xt = xt_next
+                    continue
+
+                # 通常の inversion ステップ
+                xt_next = sample_xt_next(
+                    x0=x0, xt=xt, t=t, t_next=t_next,
+                    sampling_type=self.sample_type, b=self.betas, eta=self.eta,
+                )
+
+                # FreeInv: xt と xt_next を同じ T 空間に変換してから compute_eps
+                if enc_inverter is not None:
+                    xt_T = enc_inverter.inversion_step(xt, it)
+                    xt_next_T = enc_inverter.inversion_step_apply_same(xt_next)
+                else:
+                    xt_T, xt_next_T = xt, xt_next
+
+                eps = compute_eps(
+                    xt=xt_T, xt_next=xt_next_T,
+                    t=t, t_next=t_next,
+                    models=self.generator,
+                    sampling_type=self.sample_type,
+                    b=self.betas, logvars=self.logvar,
+                    eta=self.eta, learn_sigma=self.learn_sigma,
+                )
+                print(it, (eps ** 2).sum().item())
+
+                xt = xt_next  # 元空間で進める
+                z_list.append(eps)
 
             z = torch.stack(z_list, dim=1).view(bsz, -1)
             assert z.shape[1] == self.latent_dim
 
         return z
 
-    def forward(self, z, class_label=None):
-        # Eval mode for the generator.
+    # ------------------------------------------------------------------
+    # forward
+    # ------------------------------------------------------------------
+
+    def forward(self, z, class_label=None, inversion_latents=None):
         self.generator.eval()
 
-        img = self.generate(z, class_label)
+        img = self.generate(z, class_label, inversion_latents=inversion_latents)
 
         # Post process.
         img = self.post_process(img)
+
+        # 最終出力を保存
+        if self.save_intermediate:
+            self._save_image(img * 2.0 - 1.0, tag="generate_final")
 
         return img
 

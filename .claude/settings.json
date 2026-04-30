@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(conda info *)",
+      "Read(//home/dl-box/miniconda3/**)",
+      "Read(//home/dl-box/anaconda3/envs/**)",
+      "Bash(conda run -n takagi-faces2anime python3 -c ' *)",
+      "Bash(conda run *)",
+      "Bash(/home/dl-box/anaconda3/envs/takagi-faces2anime/bin/python3 -c \"import torch; print\\(torch.__version__\\)\")",
+      "Bash(/home/dl-box/anaconda3/envs/takagi-faces2anime/bin/python3 -c ' *)",
+      "Bash(/home/dl-box/anaconda3/envs/takagi-faces2anime/bin/python3)",
+      "Bash(xargs cat *)",
+      "Read(//data2/takagi/**)",
+      "Read(//home/dl-box/**)",
+      "Read(//home/**)"
+    ]
+  }
+}

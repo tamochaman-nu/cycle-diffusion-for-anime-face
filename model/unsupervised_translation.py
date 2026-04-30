@@ -46,7 +46,8 @@ class UnsupervisedTranslation(nn.Module):
         else:
             assert class_label is None
             z = self.source_gan_wrapper.encode(image=original_image)
-            img = self.target_gan_wrapper(z=z)
+            inversion_latents = getattr(self.source_gan_wrapper, '_inversion_latents', None)
+            img = self.target_gan_wrapper(z=z, inversion_latents=inversion_latents)
 
         # Placeholders
         losses = dict()

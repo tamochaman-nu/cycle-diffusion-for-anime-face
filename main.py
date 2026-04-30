@@ -26,6 +26,7 @@ def get_dataset_splits(args):
         task_raw_data_splits = datasets.load_dataset(
             path=task_args.raw_data.data_program,
             cache_dir=task_args.raw_data.data_cache_dir,
+            trust_remote_code=True,
         )
         task_preprocessor = get_preprocessor(task_args.preprocess.preprocess_program)
         task_dataset_splits = task_preprocessor(task_args, args).preprocess(task_raw_data_splits, cache_root)
@@ -65,6 +66,36 @@ def main():
     training_args, = parser.parse_args_into_dataclasses()
     set_seed(training_args.seed)
     args = get_config(training_args.cfg)
+
+    # --- eta / guidance_scale の上書き ---
+    if training_args.eta is not None:
+        args.gan.eta = training_args.eta
+    if training_args.guidance_scale is not None:
+        _guidance_scale_supported = {"LatentDiffStochastic", "LatentDiff", "LatentDiffStochasticText", "SDStochasticText"}
+        if args.gan.gan_type in _guidance_scale_supported:
+            args.gan.unconditional_guidance_scale = training_args.guidance_scale
+        else:
+            print(f"WARNING: --guidance_scale is not supported for gan_type={args.gan.gan_type}, ignoring.")
+
+    # --- 新規パラメータの上書き（None の場合はそのままconfigの値を使う） ---
+    _new_gan_params = {
+        'use_freeinv':          training_args.use_freeinv,
+        'freeinv_seed':         training_args.freeinv_seed,
+        'use_siminversion':     training_args.use_siminversion,
+        'source_guidance_scale': training_args.source_guidance_scale,
+        'target_guidance_scale': training_args.target_guidance_scale,
+        'taba_ratio':           training_args.taba_ratio,
+        'use_fbsdiff':          training_args.use_fbsdiff,
+        'fbsdiff_cutoff':       training_args.fbsdiff_cutoff,
+        'fbsdiff_start_step':   training_args.fbsdiff_start_step,
+        'fbsdiff_end_step':     training_args.fbsdiff_end_step,
+        'fbsdiff_cache_every':  training_args.fbsdiff_cache_every,
+        'save_intermediate':    training_args.save_intermediate,
+        'intermediate_dir':     training_args.intermediate_dir,
+    }
+    for key, val in _new_gan_params.items():
+        if val is not None:
+            setattr(args.gan, key, val)
 
     # Deterministic behavior of torch.addmm.
     # Please refer to https://docs.nvidia.com/cuda/cublas/index.html#cublasApi_reproducibility
