@@ -12,6 +12,7 @@ services:
       - /mnt/NAS/vr:/mnt/NAS/vr:ro
     environment:
       - CUDA_VISIBLE_DEVICES=0
+      - CUDA_LAUNCH_BLOCKING=1
       - WANDB_MODE=offline
       - WANDB_API_KEY=${WANDB_API_KEY:-}
       - RUN_NAME=translate_ffhq256_to_anime256_ddim_eta01
@@ -42,6 +43,8 @@ services:
       --eval_steps 50
       --metric_for_best_model CLIPEnergy
       --greater_is_better false
+      --save_intermediate True
+      --intermediate_dir ./debug
       --save_strategy steps
       --save_steps 50
       --save_total_limit 1
@@ -57,8 +60,15 @@ services:
       --per_device_eval_batch_size 1
       --eval_accumulation_steps 4
       --ddp_find_unused_parameters true
-      --verbose false
+      --verbose true
       --eta 0.001
+      --use_freeinv True
+      --freeinv_seed 42
+      --use_fbsdiff True
+      --fbsdiff_cutoff 0.7
+      --fbsdiff_start_step 0
+      --fbsdiff_end_step 30
+      --fbsdiff_cache_every 1
 
   app-local:
     build:
@@ -70,6 +80,7 @@ services:
       - .:/app
     environment:
       - CUDA_VISIBLE_DEVICES=0
+      - CUDA_LAUNCH_BLOCKING=1
       - WANDB_MODE=offline
       - WANDB_API_KEY=${WANDB_API_KEY:-}
       - SEED=42

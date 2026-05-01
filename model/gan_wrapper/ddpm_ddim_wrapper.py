@@ -80,11 +80,27 @@ def prepare_ddpm_ddim(source_model_type, source_model_path):
                 '--model_path', 'ckpts/ddpm/church_outdoor.ckpt',
             ]
         )
+    elif source_model_type == 'ffhq256_v2':
+        assert source_model_path is not None
+        ddim_args = parser.parse_args(
+            [
+                '--config', 'ffhq_v2.yml',
+                '--model_path', source_model_path,
+            ]
+        )
     elif source_model_type == 'anime256':
         assert source_model_path is not None
         ddim_args = parser.parse_args(
             [
                 '--config', 'anime.yml',
+                '--model_path', source_model_path,
+            ]
+        )
+    elif source_model_type == 'anime512':
+        assert source_model_path is not None
+        ddim_args = parser.parse_args(
+            [
+                '--config', 'anime512.yml',
                 '--model_path', source_model_path,
             ]
         )
@@ -146,7 +162,10 @@ def denoising_step_with_eps(xt, eps, t, t_next, *,
             # calculations for posterior q(x_{t-1} | x_t, x_0)
             bt = extract(b, t, xt.shape)
             at = extract((1.0 - b).cumprod(dim=0), t, xt.shape)  # at is the \hat{\alpha}_t (DDIM does not use \hat notation)
-            at_next = extract((1.0 - b).cumprod(dim=0), t_next, xt.shape)  # at is the \hat{\alpha}_t (DDIM does not use \hat notation)
+            if t_next.sum() == -t_next.shape[0]:  # t_next == -1
+                at_next = torch.ones_like(at)
+            else:
+                at_next = extract((1.0 - b).cumprod(dim=0), t_next, xt.shape)  # at is the \hat{\alpha}_t (DDIM does not use \hat notation)
             posterior_variance = bt * (1.0 - at_next) / (1.0 - at)
             # log calculation clipped because the posterior variance is 0 at the
             # beginning of the diffusion chain.
@@ -274,7 +293,6 @@ def compute_eps(xt, xt_next, t, t_next, models, sampling_type, b, logvars, eta, 
         weight = bt / torch.sqrt(1 - at)
 
         mean = 1 / torch.sqrt(1.0 - bt) * (xt - weight * et)
-        print('torch.exp(0.5 * logvar).sum()', torch.exp(0.5 * logvar).sum())
         eps = (xt_next - mean) / torch.exp(0.5 * logvar)
 
     elif sampling_type == 'ddim':
@@ -318,7 +336,6 @@ def sample_xt_next(x0, xt, t, t_next, sampling_type, b, eta):
 
 def sample_xt(x0, t, b):
     at = extract((1.0 - b).cumprod(dim=0), t, x0.shape)  # at is the \hat{\alpha}_t
-    print('at', at)
     xt = at.sqrt() * x0 + (1 - at).sqrt() * torch.randn_like(x0)
     return xt
 
@@ -405,7 +422,7 @@ class DDPMDDIMWrapper(torch.nn.Module):
             else:
                 raise ValueError()
             print("Original diffusion Model loaded.")
-        elif config.data.dataset in ["FFHQ", "AFHQ", "IMAGENET", "Anime"]:
+        elif config.data.dataset in ["FFHQ", "FFHQ_v2", "AFHQ", "IMAGENET", "Anime", "Anime512"]:
             self.generator = i_DDPM(config.data.dataset)
             self.learn_sigma = False
             self.logvar = np.log(np.maximum(posterior_variance, 1e-20))
@@ -536,12 +553,12 @@ class DDPMDDIMWrapper(torch.nn.Module):
             else:
                 for r in range(self.refine_iterations):
                     refine_eta = 1
-                    t = (torch.ones(bsz) * self.refine_steps - 1).to(self.device)
+                    seq_inv_refine = seq_inv[:self.refine_steps]
+                    seq_inv_next_refine = seq_inv_next[:self.refine_steps]
+                    t = (torch.ones(bsz) * seq_inv_refine[-1]).to(self.device)
                     xt = sample_xt(x0=x, t=t, b=self.betas)
                     x = xt
                     assert self.refine_steps < self.custom_steps
-                    seq_inv_refine = seq_inv[:self.refine_steps]
-                    seq_inv_next_refine = seq_inv_next[:self.refine_steps]
                     for i, j in zip(reversed(seq_inv_refine), reversed(seq_inv_next_refine)):
                         t = (torch.ones(bsz) * i).to(self.device)
                         t_next = (torch.ones(bsz) * j).to(self.device)
@@ -589,7 +606,7 @@ class DDPMDDIMWrapper(torch.nn.Module):
                 assert class_label is not None
                 raise NotImplementedError()
 
-            T = (torch.ones(bsz) * (self.es_steps - 1)).to(self.device)
+            T = (torch.ones(bsz) * seq_inv[-1]).to(self.device)
             xT = sample_xt(x0=x0, t=T, b=self.betas)
             z_list = [xT]
 
@@ -641,8 +658,6 @@ class DDPMDDIMWrapper(torch.nn.Module):
                     b=self.betas, logvars=self.logvar,
                     eta=self.eta, learn_sigma=self.learn_sigma,
                 )
-                print(it, (eps ** 2).sum().item())
-
                 xt = xt_next  # 元空間で進める
                 z_list.append(eps)
 
