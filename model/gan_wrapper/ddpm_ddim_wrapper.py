@@ -12,6 +12,8 @@ from ..lib.ddpm_ddim.utils.diffusion_utils import (
     get_beta_schedule, denoising_step, extract
 )
 from ..model_utils import requires_grad
+from tqdm import tqdm
+
 
 
 def prepare_ddpm_ddim(source_model_type, source_model_path):
@@ -268,7 +270,10 @@ def compute_eps(xt, xt_next, t, t_next, models, sampling_type, b, logvars, eta, 
             # calculations for posterior q(x_{t-1} | x_t, x_0)
             bt = extract(b, t, xt.shape)
             at = extract((1.0 - b).cumprod(dim=0), t, xt.shape)  # at is the \hat{\alpha}_t (DDIM does not use \hat notation)
-            at_next = extract((1.0 - b).cumprod(dim=0), t_next, xt.shape)  # at is the \hat{\alpha}_t (DDIM does not use \hat notation)
+            if t_next.sum() == -t_next.shape[0]:
+                at_next = torch.ones_like(at)
+            else:
+                at_next = extract((1.0 - b).cumprod(dim=0), t_next, xt.shape)  # at_next is the \hat{\alpha}_{t_next}
             posterior_variance = bt * (1.0 - at_next) / (1.0 - at)
             # log calculation clipped because the posterior variance is 0 at the
             # beginning of the diffusion chain.
@@ -285,9 +290,10 @@ def compute_eps(xt, xt_next, t, t_next, models, sampling_type, b, logvars, eta, 
     bt = extract(b, t, xt.shape)  # bt is the \beta_t
     at = extract((1.0 - b).cumprod(dim=0), t, xt.shape)  # at is the \hat{\alpha}_t (DDIM does not use \hat notation)
 
-    assert not t_next.sum() == -t_next.shape[0]  # t_next should never be -1
-    assert not t.sum() == 0  # t should never be 0
-    at_next = extract((1.0 - b).cumprod(dim=0), t_next, xt.shape)  # at_next is the \hat{\alpha}_{t_next}
+    if t_next.sum() == -t_next.shape[0]:
+        at_next = torch.ones_like(at)
+    else:
+        at_next = extract((1.0 - b).cumprod(dim=0), t_next, xt.shape)  # at_next is the \hat{\alpha}_{t_next}
 
     if sampling_type == 'ddpm':
         weight = bt / torch.sqrt(1 - at)
@@ -311,9 +317,11 @@ def sample_xt_next(x0, xt, t, t_next, sampling_type, b, eta):
     bt = extract(b, t, xt.shape)  # bt is the \beta_t
     at = extract((1.0 - b).cumprod(dim=0), t, xt.shape)  # at is the \hat{\alpha}_t (DDIM does not use \hat notation)
 
-    assert not t_next.sum() == -t_next.shape[0]  # t_next should never be -1
-    assert not t.sum() == 0  # t should never be 0
-    at_next = extract((1.0 - b).cumprod(dim=0), t_next, xt.shape)  # at_next is the \hat{\alpha}_{t_next}
+    if t_next.sum() == -t_next.shape[0]:
+        at_next = torch.ones_like(at)
+    else:
+        at_next = extract((1.0 - b).cumprod(dim=0), t_next, xt.shape)  # at_next is the \hat{\alpha}_{t_next}
+
 
     if sampling_type == 'ddpm':
         w0 = at_next.sqrt() * bt / (1 - at)
@@ -354,7 +362,9 @@ class DDPMDDIMWrapper(torch.nn.Module):
                  use_fbsdiff=False, fbsdiff_cutoff=0.3,
                  fbsdiff_start_step=0, fbsdiff_end_step=30, fbsdiff_cache_every=1,
                  # 中間出力の保存
-                 save_intermediate=False, intermediate_dir='./debug'):
+                 save_intermediate=False, intermediate_dir='./debug',
+                 show_progress=True, use_domain_embed=False):
+
         super(DDPMDDIMWrapper, self).__init__()
 
         self.enforce_class_input = enforce_class_input
@@ -380,6 +390,8 @@ class DDPMDDIMWrapper(torch.nn.Module):
         self.fbsdiff_cache_every = fbsdiff_cache_every
         self.save_intermediate = save_intermediate
         self.intermediate_dir = intermediate_dir
+        self.show_progress = show_progress
+
 
         # inversion 後に FBSDiff 用の latent を格納するキャッシュ
         self._inversion_latents = {}
@@ -394,8 +406,8 @@ class DDPMDDIMWrapper(torch.nn.Module):
         # Set up generator
         self.ddim_args, config = prepare_ddpm_ddim(source_model_type, source_model_path)
 
-        print(self.ddim_args)
-        print(config)
+        # print(self.ddim_args)
+        # print(config)
 
         betas = get_beta_schedule(
             beta_start=config.diffusion.beta_start,
@@ -423,10 +435,10 @@ class DDPMDDIMWrapper(torch.nn.Module):
                 raise ValueError()
             print("Original diffusion Model loaded.")
         elif config.data.dataset in ["FFHQ", "FFHQ_v2", "AFHQ", "IMAGENET", "Anime", "Anime512"]:
-            self.generator = i_DDPM(config.data.dataset)
+            self.generator = i_DDPM(config.data.dataset, use_domain_embed=use_domain_embed)
             self.learn_sigma = False
             self.logvar = np.log(np.maximum(posterior_variance, 1e-20))
-            print("Improved diffusion Model loaded.")
+            print(f"Improved diffusion Model loaded (use_domain_embed={use_domain_embed}).")
         else:
             print('Not implemented dataset')
             raise NotImplementedError()
@@ -435,7 +447,7 @@ class DDPMDDIMWrapper(torch.nn.Module):
 
         self.resolution = config.data.image_size
         self.channels = config.data.channels
-        self.latent_dim = self.resolution ** 2 * self.channels * self.es_steps
+        self.latent_dim = self.resolution ** 2 * self.channels * min(self.es_steps, self.custom_steps)
         # Freeze.
         requires_grad(self.generator, False)
 
@@ -502,7 +514,13 @@ class DDPMDDIMWrapper(torch.nn.Module):
             assert class_label is not None
             raise NotImplementedError()
         else:
-            for it, (i, j) in enumerate(zip(reversed(seq_inv), reversed(seq_inv_next))):
+            pbar = tqdm(
+                enumerate(zip(reversed(seq_inv), reversed(seq_inv_next))),
+                total=len(seq_inv),
+                desc="[Generate]",
+                disable=not self.show_progress
+            )
+            for it, (i, j) in pbar:
                 t = (torch.ones(bsz) * i).to(self.device)
                 t_next = (torch.ones(bsz) * j).to(self.device)
 
@@ -558,7 +576,7 @@ class DDPMDDIMWrapper(torch.nn.Module):
                     t = (torch.ones(bsz) * seq_inv_refine[-1]).to(self.device)
                     xt = sample_xt(x0=x, t=t, b=self.betas)
                     x = xt
-                    assert self.refine_steps < self.custom_steps
+                    assert self.refine_steps <= self.custom_steps
                     for i, j in zip(reversed(seq_inv_refine), reversed(seq_inv_next_refine)):
                         t = (torch.ones(bsz) * i).to(self.device)
                         t_next = (torch.ones(bsz) * j).to(self.device)
@@ -616,7 +634,13 @@ class DDPMDDIMWrapper(torch.nn.Module):
                 self._save_image(xT, tag="encode_xT")
 
             xt = xT
-            for it, (i, j) in enumerate(zip(reversed(seq_inv), reversed(seq_inv_next))):
+            pbar = tqdm(
+                enumerate(zip(reversed(seq_inv), reversed(seq_inv_next))),
+                total=min(len(seq_inv), self.es_steps - 1),
+                desc="[Encode]",
+                disable=not self.show_progress
+            )
+            for it, (i, j) in pbar:
                 t = (torch.ones(bsz) * i).to(self.device)
                 t_next = (torch.ones(bsz) * j).to(self.device)
 

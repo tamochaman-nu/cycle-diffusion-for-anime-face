@@ -15,7 +15,7 @@ services:
       - CUDA_LAUNCH_BLOCKING=1
       - WANDB_MODE=offline
       - WANDB_API_KEY=${WANDB_API_KEY:-}
-      - RUN_NAME=translate_ffhq256_to_anime256_ddim_eta01
+      - RUN_NAME=translate_ffhq256_to_anime256_eta001_fbsdiff_1000stp_wvloss001
       - SEED=42
     deploy:
       resources:
@@ -29,13 +29,13 @@ services:
     tty: true
     working_dir: /app
     command: >
-      python -m torch.distributed.launch
+      bash -c "python -m torch.distributed.launch
       --nproc_per_node 1
       --master_port 1446
       main.py
       --seed 42
       --cfg experiments/translate_ffhq256_to_anime256_ddim_eta01.cfg
-      --run_name translate_ffhq256-10000_to_anime256-10000_ddim_eta001
+      --run_name $$RUN_NAME
       --logging_strategy steps
       --logging_first_step true
       --logging_steps 4
@@ -44,7 +44,7 @@ services:
       --metric_for_best_model CLIPEnergy
       --greater_is_better false
       --save_intermediate True
-      --intermediate_dir ./debug
+      --intermediate_dir ./debug/$$RUN_NAME
       --save_strategy steps
       --save_steps 50
       --save_total_limit 1
@@ -54,7 +54,7 @@ services:
       --adafactor false
       --learning_rate 1e-3
       --do_eval
-      --output_dir output/translate_ffhq256-10000_to_anime256-10000_ddim_eta001_eta001
+      --output_dir output/$$RUN_NAME
       --overwrite_output_dir
       --per_device_train_batch_size 1
       --per_device_eval_batch_size 1
@@ -64,25 +64,26 @@ services:
       --eta 0.001
       --use_freeinv True
       --freeinv_seed 42
-      --use_fbsdiff True
-      --fbsdiff_cutoff 0.7
+      --use_fbsdiff False
+      --fbsdiff_cutoff 0.3
       --fbsdiff_start_step 0
       --fbsdiff_end_step 30
-      --fbsdiff_cache_every 1
-
-  app-local:
+      --fbsdiff_cache_every 1"
+  app-wavelet:
     build:
       context: .
       dockerfile: Dockerfile
     image: cyclediffusion:latest
-    container_name: cyclediffusion-local-container
+    container_name: cyclediffusion-container
     volumes:
       - .:/app
+      - /mnt/NAS/vr:/mnt/NAS/vr:ro
     environment:
       - CUDA_VISIBLE_DEVICES=0
       - CUDA_LAUNCH_BLOCKING=1
       - WANDB_MODE=offline
       - WANDB_API_KEY=${WANDB_API_KEY:-}
+      - RUN_NAME=${RUN_NAME:-translate_ffhq256_to_anime256_10000_eta0001_free_inv_fbsdiff010_100stp_100stp_020rstp_wvloss001}
       - SEED=42
     deploy:
       resources:
@@ -91,18 +92,18 @@ services:
             - driver: nvidia
               device_ids: ['${GPU_ID:-2}']
               capabilities: [gpu]
-    ipc: host
+    ipc: host # Important for multiprocessing/DDP
     stdin_open: true
     tty: true
     working_dir: /app
     command: >
-      python -m torch.distributed.launch
+      bash -c "python -m torch.distributed.launch
       --nproc_per_node 1
-      --master_port 1447
+      --master_port 1446
       main.py
       --seed 42
-      --cfg experiments/translate_ffhq_test256_to_anime256_ddim_eta01.cfg
-      --run_name translate_ffhq_test256_to_anime256_ddim_eta01
+      --cfg experiments/translate_ffhq256_to_anime256_ddim_eta01_wvloss.cfg
+      --run_name $$RUN_NAME
       --logging_strategy steps
       --logging_first_step true
       --logging_steps 4
@@ -110,6 +111,8 @@ services:
       --eval_steps 50
       --metric_for_best_model CLIPEnergy
       --greater_is_better false
+      --save_intermediate True
+      --intermediate_dir ./debug/optimize_wvloss/$$RUN_NAME
       --save_strategy steps
       --save_steps 50
       --save_total_limit 1
@@ -119,10 +122,18 @@ services:
       --adafactor false
       --learning_rate 1e-3
       --do_eval
-      --output_dir output/translate_ffhq_test256_to_anime256
+      --output_dir output/optimize_wvloss/$$RUN_NAME
       --overwrite_output_dir
       --per_device_train_batch_size 1
       --per_device_eval_batch_size 1
       --eval_accumulation_steps 4
       --ddp_find_unused_parameters true
-      --verbose true
+      --verbose false
+      --eta 0.001
+      --use_freeinv True
+      --freeinv_seed 42
+      --use_fbsdiff True
+      --fbsdiff_cutoff $${FBSDIFF_CUTOFF:-0.1}
+      --fbsdiff_start_step 0
+      --fbsdiff_end_step $${FBSDIFF_END_STEP:-100}
+      --fbsdiff_cache_every 1"

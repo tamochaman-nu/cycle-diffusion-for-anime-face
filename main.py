@@ -92,7 +92,10 @@ def main():
         'fbsdiff_cache_every':  training_args.fbsdiff_cache_every,
         'save_intermediate':    training_args.save_intermediate,
         'intermediate_dir':     training_args.intermediate_dir,
+        'show_progress':        training_args.show_progress,
+        'use_domain_embed':     training_args.use_domain_embed,
     }
+
     for key, val in _new_gan_params.items():
         if val is not None:
             setattr(args.gan, key, val)

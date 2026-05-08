@@ -92,5 +92,17 @@ class CustomTrainingArguments(TrainingArguments):
         metadata={"help": "中間画像の保存先ディレクトリ。"},
     )
 
+    show_progress: bool = field(
+        default=True,
+        metadata={"help": "変換処理（Diffusion steps）の進捗バーを表示するかどうか。"},
+    )
+
+    use_domain_embed: Optional[bool] = field(
+        default=None,
+        metadata={"help": "モデルアーキテクチャで domain_embed を使用するかどうかを指定します（waveletloss など用）。"},
+    )
+
+
+
 
 

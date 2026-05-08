@@ -30,6 +30,7 @@ import torch
 from PIL import Image
 from torchvision import transforms
 from torchvision.utils import save_image
+from tqdm import tqdm
 
 
 def str_to_bool(v):
@@ -82,6 +83,9 @@ def parse_args():
     # デバイス
     p.add_argument('--device', default='cuda')
 
+    # 進捗表示
+    p.add_argument('--show_progress', type=str_to_bool, default=True)
+
     return p.parse_args()
 
 
@@ -103,6 +107,7 @@ def build_wrapper(
     taba_ratio,
     use_fbsdiff, fbsdiff_cutoff, fbsdiff_start_step, fbsdiff_end_step, fbsdiff_cache_every,
     save_intermediate, intermediate_dir,
+    show_progress,
 ):
     from model.gan_wrapper.ddpm_ddim_wrapper import DDPMDDIMWrapper
     return DDPMDDIMWrapper(
@@ -126,6 +131,7 @@ def build_wrapper(
         fbsdiff_cache_every=fbsdiff_cache_every,
         save_intermediate=save_intermediate,
         intermediate_dir=intermediate_dir,
+        show_progress=show_progress,
     )
 
 
@@ -138,13 +144,27 @@ def main():
     sys.path.insert(0, project_root)
 
     device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
-    print(f"Device: {device}")
+    if args.show_progress:
+        print(f"Device: {device}")
 
     if args.source_prompt or args.target_prompt:
-        print("NOTE: --source_prompt / --target_prompt は DDPM（非条件付き）モデルでは無視されます。")
+        if args.show_progress:
+            print("NOTE: --source_prompt / --target_prompt は DDPM（非条件付き）モデルでは無視されます。")
+
+    # --- 入力画像のリスト作成 ---
+    if os.path.isdir(args.source_image):
+        image_paths = sorted([
+            os.path.join(args.source_image, f) for f in os.listdir(args.source_image)
+            if f.lower().endswith(('.png', '.jpg', '.jpeg', '.webp'))
+        ])
+        is_batch = True
+    else:
+        image_paths = [args.source_image]
+        is_batch = False
 
     # --- ソースモデル（エンコーダ）の構築 ---
-    print(f"\n[Source] Loading {args.source_model_type} from {args.source_model_path}")
+    if args.show_progress:
+        print(f"\n[Source] Loading {args.source_model_type} from {args.source_model_path}")
     source_wrapper = build_wrapper(
         source_model_type=args.source_model_type,
         source_model_path=args.source_model_path,
@@ -166,11 +186,13 @@ def main():
         fbsdiff_cache_every=args.fbsdiff_cache_every,
         save_intermediate=args.save_intermediate,
         intermediate_dir=os.path.join(args.intermediate_dir, 'source'),
+        show_progress=args.show_progress,
     ).to(device)
     source_wrapper.eval()
 
     # --- ターゲットモデル（デコーダ）の構築 ---
-    print(f"\n[Target] Loading {args.target_model_type} from {args.target_model_path}")
+    if args.show_progress:
+        print(f"\n[Target] Loading {args.target_model_type} from {args.target_model_path}")
     target_wrapper = build_wrapper(
         source_model_type=args.target_model_type,
         source_model_path=args.target_model_path,
@@ -192,6 +214,7 @@ def main():
         fbsdiff_cache_every=args.fbsdiff_cache_every,
         save_intermediate=args.save_intermediate,
         intermediate_dir=os.path.join(args.intermediate_dir, 'target'),
+        show_progress=args.show_progress,
     ).to(device)
     target_wrapper.eval()
 
@@ -199,38 +222,54 @@ def main():
     assert source_wrapper.resolution == target_wrapper.resolution, \
         "Source and target model resolutions must match."
 
-    # --- 入力画像の読み込み ---
-    print(f"\n[Input] {args.source_image} (resized to {resolution}x{resolution})")
-    image = load_image(args.source_image, resolution).to(device)
+    # --- メイン処理ループ ---
+    pbar = tqdm(image_paths, desc="Processing images", disable=not args.show_progress)
+    for img_path in pbar:
+        if is_batch:
+            pbar.set_postfix(file=os.path.basename(img_path))
+            # 出力パスの決定
+            os.makedirs(args.output_path, exist_ok=True)
+            current_output_path = os.path.join(args.output_path, os.path.basename(img_path))
+        else:
+            current_output_path = args.output_path
 
-    # --- エンコード ---
-    print("\n[Encode] Running DDIM inversion ...")
-    with torch.no_grad():
-        z = source_wrapper.encode(image)
+        # --- 入力画像の読み込み ---
+        if not args.show_progress:
+            print(f"\n[Input] {img_path} (resized to {resolution}x{resolution})")
+        image = load_image(img_path, resolution).to(device)
 
-    inversion_latents = source_wrapper._inversion_latents
-    print(f"  z.shape = {z.shape}, "
-          f"inversion_latents cached steps = {len(inversion_latents)}")
+        # --- エンコード ---
+        if not args.show_progress:
+            print("\n[Encode] Running DDIM inversion ...")
+        with torch.no_grad():
+            z = source_wrapper.encode(image)
 
-    # --- デコード ---
-    print("\n[Decode] Generating translated image ...")
-    with torch.no_grad():
-        output = target_wrapper(z=z, inversion_latents=inversion_latents)
+        inversion_latents = source_wrapper._inversion_latents
+        if not args.show_progress:
+            print(f"  z.shape = {z.shape}, "
+                  f"inversion_latents cached steps = {len(inversion_latents)}")
 
-    # --- 出力保存 ---
-    os.makedirs(os.path.dirname(os.path.abspath(args.output_path)), exist_ok=True)
-    save_image(output, args.output_path)
-    print(f"\n[Done] Saved to {args.output_path}")
+        # --- デコード ---
+        if not args.show_progress:
+            print("\n[Decode] Generating translated image ...")
+        with torch.no_grad():
+            output = target_wrapper(z=z, inversion_latents=inversion_latents)
 
-    # 元画像と並べた比較画像も保存
-    source_resized = transforms.Resize(resolution)(
-        transforms.CenterCrop(resolution)(image)
-    )
-    post = transforms.Normalize(mean=[-1.0, -1.0, -1.0], std=[2.0, 2.0, 2.0])
-    comparison = torch.cat([source_resized, output], dim=-1)  # 横に並べる
-    base, ext = os.path.splitext(args.output_path)
-    save_image(comparison, base + '_comparison' + ext)
-    print(f"[Done] Comparison saved to {base + '_comparison' + ext}")
+        # --- 出力保存 ---
+        os.makedirs(os.path.dirname(os.path.abspath(current_output_path)), exist_ok=True)
+        save_image(output, current_output_path)
+        if not args.show_progress:
+            print(f"\n[Done] Saved to {current_output_path}")
+
+        # 元画像と並べた比較画像も保存
+        source_resized = transforms.Resize(resolution)(
+            transforms.CenterCrop(resolution)(image)
+        )
+        comparison = torch.cat([source_resized, output], dim=-1)  # 横に並める
+        base, ext = os.path.splitext(current_output_path)
+        save_image(comparison, base + '_comparison' + ext)
+        if not args.show_progress:
+            print(f"[Done] Comparison saved to {base + '_comparison' + ext}")
 
 
 if __name__ == '__main__':

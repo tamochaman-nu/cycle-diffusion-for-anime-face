@@ -139,6 +139,7 @@ def create_model(
     resblock_updown=False,
     use_fp16=False,
     use_new_attention_order=False,
+    use_domain_embed=False,
 ):
     if channel_mult == "":
         if image_size == 512:
@@ -176,22 +177,24 @@ def create_model(
         use_scale_shift_norm=use_scale_shift_norm,
         resblock_updown=resblock_updown,
         use_new_attention_order=use_new_attention_order,
+        use_domain_embed=use_domain_embed,
     )
 
 
-def i_DDPM(dataset_name = 'AFHQ'):
+def i_DDPM(dataset_name = 'AFHQ', use_domain_embed=False):
+    kwargs = {'use_domain_embed': use_domain_embed}
     if dataset_name in ['AFHQ']:
-        return create_model(**AFHQ_DICT)
+        return create_model(**AFHQ_DICT, **kwargs)
     elif dataset_name == 'FFHQ':
-        return create_model(**FFHQ_DICT)
+        return create_model(**FFHQ_DICT, **kwargs)
     elif dataset_name == 'FFHQ_v2':
-        return create_model(**FFHQ_V2_DICT)
+        return create_model(**FFHQ_V2_DICT, **kwargs)
     elif dataset_name == 'Anime':
-        return create_model(**ANIME_DICT)
+        return create_model(**ANIME_DICT, **kwargs)
     elif dataset_name == 'Anime512':
-        return create_model(**ANIME_512_DICT)
+        return create_model(**ANIME_512_DICT, **kwargs)
     elif dataset_name == 'IMAGENET':
-        return create_model(**IMAGENET_DICT)
+        return create_model(**IMAGENET_DICT, **kwargs)
     else:
         print('Not implemented.')
         exit()
