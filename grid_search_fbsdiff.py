@@ -17,16 +17,16 @@ def run_experiment(cutoff, end_step):
     
     print(f"\n>>> Running: {run_name} (cutoff={cutoff}, end_step={end_step})")
     
-    cmd = ["GPU_ID=0", "docker", "compose", "run", "--rm", "-e", f"RUN_NAME={run_name}", "-e", f"FBSDIFF_CUTOFF={cutoff}", "-e", f"FBSDIFF_END_STEP={int(end_step)}", "app-wavelet"]
+    cmd = f"GPU_ID=0 docker compose run --rm -e RUN_NAME={run_name} -e FBSDIFF_CUTOFF={cutoff} -e FBSDIFF_END_STEP={int(end_step)} app-wavelet"
     
     try:
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, shell=True, check=True)
     except subprocess.CalledProcessError as e:
         print(f"Error running experiment {run_name}: {e}")
 
 def main():
-    cutoffs = [round(x, 1) for x in np.arange(0.1, 1.1, 0.1)]
-    end_steps = [20]
+    cutoffs = [round(x, 1) for x in np.arange(0.0, 1.1, 0.1)]
+    end_steps = [i for i  in np.arange(0, 101, 10)]
     
     for cutoff in cutoffs:
         for end_step in end_steps:
