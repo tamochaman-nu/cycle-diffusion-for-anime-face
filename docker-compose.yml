@@ -15,7 +15,7 @@ services:
       - CUDA_LAUNCH_BLOCKING=1
       - WANDB_MODE=offline
       - WANDB_API_KEY=${WANDB_API_KEY:-}
-      - RUN_NAME=translate_ffhq256_to_anime256_eta001_fbsdiff_1000stp_wvloss001
+      - RUN_NAME=translate_ffhq256_to_anime256_eta001_fbsdiff_1000stp_0001_B1
       - SEED=42
     deploy:
       resources:
@@ -44,7 +44,7 @@ services:
       --metric_for_best_model CLIPEnergy
       --greater_is_better false
       --save_intermediate True
-      --intermediate_dir ./debug/$$RUN_NAME
+      --intermediate_dir ./debug/opt_fbsdiff_ffhq_anime_danbooru_B1/$$RUN_NAME
       --save_strategy steps
       --save_steps 50
       --save_total_limit 1
@@ -54,7 +54,7 @@ services:
       --adafactor false
       --learning_rate 1e-3
       --do_eval
-      --output_dir output/$$RUN_NAME
+      --output_dir output/opt_fbsdiff_ffhq_anime_danbooru_B1/$$RUN_NAME
       --overwrite_output_dir
       --per_device_train_batch_size 1
       --per_device_eval_batch_size 1
@@ -64,10 +64,10 @@ services:
       --eta 0.001
       --use_freeinv True
       --freeinv_seed 42
-      --use_fbsdiff False
-      --fbsdiff_cutoff 0.3
+      --use_fbsdiff True
+      --fbsdiff_cutoff $${FBSDIFF_CUTOFF:-0.1}
       --fbsdiff_start_step 0
-      --fbsdiff_end_step 30
+      --fbsdiff_end_step $${FBSDIFF_END_STEP:-100}
       --fbsdiff_cache_every 1"
   app-wavelet:
     build:

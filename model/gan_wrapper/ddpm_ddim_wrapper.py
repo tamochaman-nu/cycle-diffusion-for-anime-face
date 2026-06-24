@@ -424,6 +424,7 @@ class DDPMDDIMWrapper(torch.nn.Module):
         alphas_cumprod = np.cumprod(alphas, axis=0)
         alphas_cumprod_prev = np.append(1.0, alphas_cumprod[:-1])
         posterior_variance = betas * (1.0 - alphas_cumprod_prev) / (1.0 - alphas_cumprod)
+        init_ckpt = None
         if config.data.dataset in ["CelebA_HQ", "LSUN"]:
             self.generator = DDPM(config)
             self.learn_sigma = False
@@ -435,14 +436,18 @@ class DDPMDDIMWrapper(torch.nn.Module):
                 raise ValueError()
             print("Original diffusion Model loaded.")
         elif config.data.dataset in ["FFHQ", "FFHQ_v2", "AFHQ", "IMAGENET", "Anime", "Anime512"]:
-            self.generator = i_DDPM(config.data.dataset, use_domain_embed=use_domain_embed)
+            init_ckpt = torch.load(self.ddim_args.model_path, map_location="cpu")
+            has_domain_embed = any("domain_embed" in k for k in init_ckpt.keys())
+            actual_use_domain_embed = use_domain_embed or has_domain_embed
+            self.generator = i_DDPM(config.data.dataset, use_domain_embed=actual_use_domain_embed)
             self.learn_sigma = False
             self.logvar = np.log(np.maximum(posterior_variance, 1e-20))
-            print(f"Improved diffusion Model loaded (use_domain_embed={use_domain_embed}).")
+            print(f"Improved diffusion Model loaded (use_domain_embed={actual_use_domain_embed}).")
         else:
             print('Not implemented dataset')
             raise NotImplementedError()
-        init_ckpt = torch.load(self.ddim_args.model_path)
+        if init_ckpt is None:
+            init_ckpt = torch.load(self.ddim_args.model_path, map_location="cpu")
         self.generator.load_state_dict(init_ckpt)
 
         self.resolution = config.data.image_size

@@ -9,16 +9,21 @@ def main():
     # 横軸: fbs_end_step (0 to 100, 10 step)
     end_steps = range(0, 110, 10)
     
-    base_dir = "output/optimize_wvloss"
+    base_dir = "output/opt_fbsdiff_ffhq_anime_danbooru"
     img_filename = "eval_256_000000.png"
     
     # サンプル画像からサイズを取得
-    sample_run = "translate_ffhq256_to_anime256_10000_eta0001_free_inv_fbsdiff000_000stp_100stp_020rstp_wvloss001"
+    sample_run = "translate_ffhq256_to_anime256_10000_eta0001_free_inv_fbsdiff000_000stp_100stp_020rstp"
     sample_img_path = os.path.join(base_dir, sample_run, img_filename)
     
     if os.path.exists(sample_img_path):
         with Image.open(sample_img_path) as tmp:
-            img_w, img_h = tmp.size
+            padding = 2
+            if tmp.width > tmp.height:
+                img_w = (tmp.width - 3 * padding) // 2
+                img_h = tmp.height - 2 * padding
+            else:
+                img_w, img_h = tmp.size
     else:
         img_w, img_h = 256, 256 # デフォルト
         
@@ -55,12 +60,20 @@ def main():
                 
             step_str = f"{int(end_step):03d}"
             # フォルダ名の構築
-            run_name = f"translate_ffhq256_to_anime256_10000_eta0001_free_inv_fbsdiff{cutoff_str}_{step_str}stp_100stp_020rstp_wvloss001"
+            run_name = f"translate_ffhq256_to_anime256_10000_eta0001_free_inv_fbsdiff{cutoff_str}_{step_str}stp_100stp_020rstp"
             img_path = os.path.join(base_dir, run_name, img_filename)
             
             if os.path.exists(img_path):
                 with Image.open(img_path) as img:
-                    canvas.paste(img, (margin_left + c * img_w, margin_top + r * img_h))
+                    padding = 2
+                    if img.width > img.height:
+                        single_w = (img.width - 3 * padding) // 2
+                        single_h = img.height - 2 * padding
+                        box = (2 * padding + single_w, padding, 2 * padding + 2 * single_w, padding + single_h)
+                        cropped = img.crop(box)
+                    else:
+                        cropped = img
+                    canvas.paste(cropped, (margin_left + c * img_w, margin_top + r * img_h))
             else:
                 # 未完了または存在しない場合はグレー
                 placeholder = Image.new('RGB', (img_w, img_h), (80, 80, 80))
@@ -68,7 +81,7 @@ def main():
                 draw.text((margin_left + c * img_w + 10, margin_top + r * img_h + 10), "Pending/Missing", fill=(200, 200, 200))
 
     # 保存
-    output_path = "fbsdiff_grid_results.png"
+    output_path = "fbsdiff_wvloss_grid_results_d.png"
     canvas.save(output_path)
     print(f"Success! Grid result saved to: {os.path.abspath(output_path)}")
 
