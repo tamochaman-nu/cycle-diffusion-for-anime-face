@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    container_name: cycle_diffusion
+    volumes:
+      - .:/workspace/cycle-diffusion-for-anime-face
+    working_dir: /workspace/cycle-diffusion-for-anime-face
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    shm_size: '8gb'  # Necessary for some PyTorch dataloaders
+    ipc: host
+    stdin_open: true # docker run -i
+    tty: true        # docker run -t

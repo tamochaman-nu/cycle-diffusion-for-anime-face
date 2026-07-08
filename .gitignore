@@ -132,3 +132,14 @@ Temporary Items
 
 # PyCharm
 **/.idea/**/*
+
+# output and debug files
+debug/*
+output/*
+*.png
+
+# core dump files
+core.*
+
+# datasets
+data/empty/*
