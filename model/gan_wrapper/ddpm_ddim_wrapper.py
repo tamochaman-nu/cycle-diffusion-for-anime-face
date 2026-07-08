@@ -15,6 +15,34 @@ from ..model_utils import requires_grad
 from tqdm import tqdm
 
 
+class TimestepMappedModel(torch.nn.Module):
+    def __init__(self, original_model, timestep_map, original_num_steps, rescale_timesteps=True, domain_id_value=None):
+        super(TimestepMappedModel, self).__init__()
+        self.original_model = original_model
+        self.timestep_map = timestep_map
+        self.original_num_steps = original_num_steps
+        self.rescale_timesteps = rescale_timesteps
+        self.domain_id_value = domain_id_value
+
+    def __getattr__(self, name):
+        try:
+            return super().__getattr__(name)
+        except AttributeError:
+            return getattr(self.original_model, name)
+
+    def forward(self, x, timesteps, **kwargs):
+        timesteps_long = timesteps.long()
+        map_tensor = torch.tensor(self.timestep_map, device=timesteps.device, dtype=torch.long)
+        mapped_t = map_tensor[timesteps_long]
+        
+        if self.rescale_timesteps:
+            mapped_t = mapped_t.float() * (1000.0 / self.original_num_steps)
+            
+        if self.domain_id_value is not None and "domain_id" not in kwargs:
+            kwargs["domain_id"] = torch.ones(x.shape[0], dtype=torch.long, device=x.device) * self.domain_id_value
+            
+        return self.original_model(x, mapped_t, **kwargs)
+
 
 def prepare_ddpm_ddim(source_model_type, source_model_path):
     parser = argparse.ArgumentParser(description=globals()['__doc__'])
@@ -159,8 +187,9 @@ def denoising_step_with_eps(xt, eps, t, t_next, *,
         et = model(xt, t)
         if et.shape != xt.shape:
             et, model_var_values = torch.split(et, et.shape[1] // 2, dim=1)
-        if learn_sigma:
+        elif learn_sigma:
             et, model_var_values = torch.split(et, et.shape[1] // 2, dim=1)
+        if learn_sigma:
             # calculations for posterior q(x_{t-1} | x_t, x_0)
             bt = extract(b, t, xt.shape)
             at = extract((1.0 - b).cumprod(dim=0), t, xt.shape)  # at is the \hat{\alpha}_t (DDIM does not use \hat notation)
@@ -363,7 +392,8 @@ class DDPMDDIMWrapper(torch.nn.Module):
                  fbsdiff_start_step=0, fbsdiff_end_step=30, fbsdiff_cache_every=1,
                  # 中間出力の保存
                  save_intermediate=False, intermediate_dir='./debug',
-                 show_progress=True, use_domain_embed=False):
+                 show_progress=True, use_domain_embed=False,
+                 timestep_respacing=None):
 
         super(DDPMDDIMWrapper, self).__init__()
 
@@ -373,7 +403,7 @@ class DDPMDDIMWrapper(torch.nn.Module):
         self.refine_iterations = refine_iterations
         self.sample_type = sample_type
         self.eta = eta
-        self.t_0 = t_0 if t_0 is not None else 999
+        self.t_0_arg = t_0
         self.es_steps = es_steps
 
         # 新規パラメータ
@@ -409,15 +439,49 @@ class DDPMDDIMWrapper(torch.nn.Module):
         # print(self.ddim_args)
         # print(config)
 
-        betas = get_beta_schedule(
-            beta_start=config.diffusion.beta_start,
-            beta_end=config.diffusion.beta_end,
-            num_diffusion_timesteps=config.diffusion.num_diffusion_timesteps
+        # Determine original_num_steps and timestep_map
+        if source_model_type == 'ffhq256':
+            self.original_num_steps = 2000
+        elif source_model_type == 'anime256':
+            self.original_num_steps = 1000
+        else:
+            self.original_num_steps = config.diffusion.num_diffusion_timesteps
+
+        scale = 1000.0 / self.original_num_steps
+        beta_start = scale * config.diffusion.beta_start
+        beta_end = scale * config.diffusion.beta_end
+
+        base_betas = get_beta_schedule(
+            beta_start=beta_start,
+            beta_end=beta_end,
+            num_diffusion_timesteps=self.original_num_steps
         )
+        
+        base_alphas = 1.0 - base_betas
+        base_alphas_cumprod = np.cumprod(base_alphas, axis=0)
+
+        if timestep_respacing:
+            section_count = int(timestep_respacing)
+            raw_space = np.linspace(0, self.original_num_steps - 1, section_count)
+            self.timestep_map = [int(x) for x in raw_space]
+            
+            last_alpha_cumprod = 1.0
+            new_betas = []
+            use_timesteps_set = set(self.timestep_map)
+            for i, alpha_cumprod in enumerate(base_alphas_cumprod):
+                if i in use_timesteps_set:
+                    new_betas.append(1.0 - alpha_cumprod / last_alpha_cumprod)
+                    last_alpha_cumprod = alpha_cumprod
+            betas = np.array(new_betas)
+        else:
+            self.timestep_map = list(range(self.original_num_steps))
+            betas = base_betas
+
         self.register_buffer(
             'betas', torch.from_numpy(betas).float()
         )
         self.num_timesteps = betas.shape[0]
+        self.t_0 = self.t_0_arg if self.t_0_arg is not None else (self.num_timesteps - 1)
 
         # ----------- Model -----------#
         alphas = 1.0 - betas
@@ -440,7 +504,7 @@ class DDPMDDIMWrapper(torch.nn.Module):
             has_domain_embed = any("domain_embed" in k for k in init_ckpt.keys())
             actual_use_domain_embed = use_domain_embed or has_domain_embed
             self.generator = i_DDPM(config.data.dataset, use_domain_embed=actual_use_domain_embed)
-            self.learn_sigma = False
+            self.learn_sigma = True
             self.logvar = np.log(np.maximum(posterior_variance, 1e-20))
             print(f"Improved diffusion Model loaded (use_domain_embed={actual_use_domain_embed}).")
         else:
@@ -449,6 +513,15 @@ class DDPMDDIMWrapper(torch.nn.Module):
         if init_ckpt is None:
             init_ckpt = torch.load(self.ddim_args.model_path, map_location="cpu")
         self.generator.load_state_dict(init_ckpt)
+
+        domain_id_value = 0 if source_model_type == 'ffhq256' else 1
+        self.generator = TimestepMappedModel(
+            self.generator,
+            self.timestep_map,
+            self.original_num_steps,
+            rescale_timesteps=True,
+            domain_id_value=domain_id_value
+        )
 
         self.resolution = config.data.image_size
         self.channels = config.data.channels
@@ -689,8 +762,12 @@ class DDPMDDIMWrapper(torch.nn.Module):
                 )
                 xt = xt_next  # 元空間で進める
                 z_list.append(eps)
+                # Print debug stats occasionally to prevent log flooding (e.g. step 0, 100, 200)
+                if it % 50 == 0:
+                    print(f"   [Debug Inversion] step {it} eps: mean={eps.mean().item():.4f}, std={eps.std().item():.4f}, min={eps.min().item():.4f}, max={eps.max().item():.4f}")
 
             z = torch.stack(z_list, dim=1).view(bsz, -1)
+            print(f"   [Debug Inversion] Final z: mean={z.mean().item():.4f}, std={z.std().item():.4f}, min={z.min().item():.4f}, max={z.max().item():.4f}")
             assert z.shape[1] == self.latent_dim
 
         return z

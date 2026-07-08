@@ -7,13 +7,13 @@ def main():
     # 縦軸: fbsdiff_cutoff (0.0 to 0.8, 0.1 step)
     cutoffs = [round(x, 1) for x in np.arange(0.0, 0.9, 0.1)]
     # 横軸: fbs_end_step (0 to 100, 10 step)
-    end_steps = range(0, 110, 10)
+    end_steps = range(0, 275, 25)
     
-    base_dir = "output/opt_fbsdiff_ffhq_anime_danbooru"
+    base_dir = "output/danbooru_100000steps_no_freeinv_rev"
     img_filename = "eval_256_000000.png"
     
     # サンプル画像からサイズを取得
-    sample_run = "translate_ffhq256_to_anime256_10000_eta0001_free_inv_fbsdiff000_000stp_100stp_020rstp"
+    sample_run = "translate_ffhq256_to_anime256_100000_eta08_free_inv_fbsdiff090_150stp_250stp_025rstp"
     sample_img_path = os.path.join(base_dir, sample_run, img_filename)
     
     if os.path.exists(sample_img_path):
@@ -60,7 +60,7 @@ def main():
                 
             step_str = f"{int(end_step):03d}"
             # フォルダ名の構築
-            run_name = f"translate_ffhq256_to_anime256_10000_eta0001_free_inv_fbsdiff{cutoff_str}_{step_str}stp_100stp_020rstp"
+            run_name = f"translate_ffhq256_to_anime256_100000_eta08_free_inv_fbsdiff{cutoff_str}_{step_str}stp_250stp_025rstp"
             img_path = os.path.join(base_dir, run_name, img_filename)
             
             if os.path.exists(img_path):
@@ -81,7 +81,7 @@ def main():
                 draw.text((margin_left + c * img_w + 10, margin_top + r * img_h + 10), "Pending/Missing", fill=(200, 200, 200))
 
     # 保存
-    output_path = "fbsdiff_wvloss_grid_results_d.png"
+    output_path = "fbsdiff_wvloss_grid_results_d_rev.png"
     canvas.save(output_path)
     print(f"Success! Grid result saved to: {os.path.abspath(output_path)}")
 

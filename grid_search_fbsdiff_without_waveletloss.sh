@@ -20,12 +20,14 @@ for i in {0..10}; do
     cutoff_val=$(( i * 10 ))
     cutoff_str=$(printf "%03d" "$cutoff_val")
 
-    for ((end_step=0; end_step<=100; end_step+=10)); do
+    for ((end_step=0; end_step<=250; end_step+=25)); do
         step_str=$(printf "%03d" "$end_step")
         
-        run_name="translate_ffhq256_to_anime256_10000_eta0001_free_inv_fbsdiff${cutoff_str}_${step_str}stp_100stp_020rstp"
-        
-        OUTPUT_DIR="output/opt_fbsdiff_ffhq_anime_danbooru_B1/${run_name}"
+        run_name="translate_ffhq256_to_anime256_100000_eta08_free_inv_fbsdiff${cutoff_str}_${step_str}stp_250stp_025rstp"
+        exp_name="danbooru_100000steps_no_freeinv_rev"
+
+        OUTPUT_DIR="output/${exp_name}/${run_name}"
+        DEBUG_DIR="debug/${exp_name}/${run_name}"
         
         # Check if experiment has already completed successfully
         if [ -f "${OUTPUT_DIR}/eval_results.json" ]; then
@@ -39,6 +41,8 @@ for i in {0..10}; do
             -e RUN_NAME="${run_name}" \
             -e FBSDIFF_CUTOFF="${cutoff}" \
             -e FBSDIFF_END_STEP="${end_step}" \
+            -e OUTPUT_DIR="${OUTPUT_DIR}" \
+            -e INTERMEDIATE_DIR="${DEBUG_DIR}" \
             app
         
         # Cooling down delay to prevent overheating and allow OS/GPU to reclaim VRAM
