@@ -143,3 +143,6 @@ core.*
 
 # datasets
 data/empty/*
+
+# ckpts
+ddpm/*.pt
