@@ -1,10 +1,31 @@
+import math
+
 import numpy as np
 import torch
 
 
-def get_beta_schedule(*, beta_start, beta_end, num_diffusion_timesteps):
-    betas = np.linspace(beta_start, beta_end,
-                        num_diffusion_timesteps, dtype=np.float64)
+def get_beta_schedule(*, beta_start, beta_end, num_diffusion_timesteps, beta_schedule="linear"):
+    if beta_schedule == "linear":
+        betas = np.linspace(beta_start, beta_end,
+                            num_diffusion_timesteps, dtype=np.float64)
+    elif beta_schedule == "cosine":
+        # Matches openai/improved-diffusion's gaussian_diffusion.get_named_beta_schedule
+        # ("cosine"): needed for checkpoints trained with --noise_schedule cosine,
+        # which is a common (often default) choice in that codebase and is NOT
+        # equivalent to the linear schedule above -- using the wrong one causes the
+        # DDIM sampler's alphas to diverge from what the model was trained on.
+        def alpha_bar(t):
+            return math.cos((t + 0.008) / 1.008 * math.pi / 2) ** 2
+
+        max_beta = 0.999
+        betas = []
+        for i in range(num_diffusion_timesteps):
+            t1 = i / num_diffusion_timesteps
+            t2 = (i + 1) / num_diffusion_timesteps
+            betas.append(min(1 - alpha_bar(t2) / alpha_bar(t1), max_beta))
+        betas = np.array(betas, dtype=np.float64)
+    else:
+        raise NotImplementedError(f"Unknown beta_schedule: {beta_schedule}")
     assert betas.shape == (num_diffusion_timesteps,)
     return betas
 

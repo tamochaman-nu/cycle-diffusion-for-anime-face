@@ -22,6 +22,35 @@ AFHQ_DICT = dict(
 )
 
 
+# Matches a pair of self-trained openai/improved-diffusion 256x256 unconditional
+# face checkpoints (e.g. ffhq/anime) whose state_dict does NOT match AFHQ_DICT:
+# num_res_blocks=2 (not 1), attention at both 16x16 and 8x8 (not just 16x16), and
+# plain conv up/down-sampling instead of resblock_updown. Reverse-engineered from
+# the checkpoint's state_dict shapes (input_blocks.{3,6,9,12,15}.0.op.* are plain
+# Downsample convs, no h_upd/x_upd keys anywhere -> resblock_updown=False; each
+# channel_mult stage has exactly 2 residual blocks before its downsample; emb_layers
+# output is 2x the block's out_channels -> use_scale_shift_norm=True; out channels
+# = 6 = 2*3 -> learn_sigma=True).
+CUSTOM_FACE256_DICT = dict(
+    attention_resolutions="16,8",
+    class_cond=False,
+    dropout=0.0,
+    image_size=256,
+    learn_sigma=True,
+    num_channels=128,
+    num_head_channels=64,
+    num_res_blocks=2,
+    resblock_updown=False,
+    use_fp16=False,
+    use_scale_shift_norm=True,
+    num_heads=4,
+    num_heads_upsample=-1,
+    channel_mult="",
+    use_checkpoint=False,
+    use_new_attention_order=False,
+)
+
+
 IMAGENET_DICT = dict(
     attention_resolutions="32,16,8",
     class_cond=True,
@@ -104,6 +133,8 @@ def i_DDPM(dataset_name = 'AFHQ'):
         return create_model(**AFHQ_DICT)
     elif dataset_name == 'IMAGENET':
         return create_model(**IMAGENET_DICT)
+    elif dataset_name == 'CUSTOM_FACE256':
+        return create_model(**CUSTOM_FACE256_DICT)
     else:
         print('Not implemented.')
         exit()

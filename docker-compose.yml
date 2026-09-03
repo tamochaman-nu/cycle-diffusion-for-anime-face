@@ -1,20 +1,68 @@
-version: '3.8'
+# Three services sharing one image (built from ./Dockerfile), differing only
+# in `entrypoint`:
+#   ffhq2anime  - runs translate_ffhq_to_anime.py (the actual FFHQ -> anime
+#                 CycleDiffusion translation). Usage:
+#                   docker compose run --rm ffhq2anime --input <img> --output <img> \
+#                       --source_model_path <ckpt> --target_model_path <ckpt>
+#   diagA       - runs any diagnostics/step_a*.py script (see diagnostics/README.md).
+#                   docker compose run --rm diagA diagnostics/step_a1_anime_unconditional_sample.py --model_path <ckpt>
+#   diagB       - runs any diagnostics/step_b*.py script.
+#                   docker compose run --rm diagB diagnostics/step_b2_channel_split_check.py
+# diagA/diagB share an identical (generic "python") entrypoint; they are
+# named separately only to mirror the A/B diagnostic grouping in
+# diagnostics/README.md. Either can technically run any script in the repo
+# (e.g. `docker compose run --rm diagA main.py --cfg ...` also works, for
+# this repo's own non-diagnostic CycleDiffusion entrypoint).
+#
+# Build once with `docker compose build` (subsequent builds/services reuse
+# Docker's layer cache). All three mount the whole repo read-write at
+# /workspace/cycle-diffusion-for-anime-face, so ckpts/, diagnostics/outputs/,
+# and any --output path under the repo are visible on the host immediately.
+#
+# Dataset mounts (host WSL2 paths under /mnt/d/takagi/ffhq_anime/, layered on
+# top of the repo bind mount above -- more specific mounts win, so these
+# shadow any same-named dirs under ./data/ in the repo itself, which
+# currently has none):
+#   ./data/ffhq  <- /mnt/d/takagi/ffhq_anime/ffhq512x512
+#                   (flat *.png, ~70k files, e.g. data/ffhq/00001.png)
+#   ./data/anime <- /mnt/d/takagi/ffhq_anime/highresolution-anime-face-dataset-512x512
+#                   (*.jpg under a portraits/ subfolder, ~302k files, e.g.
+#                   data/anime/portraits/10000310.jpg)
+
+x-common: &common
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: cycle-diffusion-for-anime-face:latest
+  volumes:
+    - .:/workspace/cycle-diffusion-for-anime-face
+    - /mnt/d/takagi/ffhq_anime/ffhq512x512:/workspace/cycle-diffusion-for-anime-face/data/ffhq
+    - /mnt/d/takagi/ffhq_anime/highresolution-anime-face-dataset-512x512:/workspace/cycle-diffusion-for-anime-face/data/anime
+  working_dir: /workspace/cycle-diffusion-for-anime-face
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: 1
+            capabilities: [gpu]
+  shm_size: '8gb'  # Necessary for some PyTorch dataloaders
+  ipc: host
+  stdin_open: true # docker run -i
+  tty: true        # docker run -t
 
 services:
-  app:
-    build: .
-    container_name: cycle_diffusion
-    volumes:
-      - .:/workspace/cycle-diffusion-for-anime-face
-    working_dir: /workspace/cycle-diffusion-for-anime-face
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    shm_size: '8gb'  # Necessary for some PyTorch dataloaders
-    ipc: host
-    stdin_open: true # docker run -i
-    tty: true        # docker run -t
+  ffhq2anime:
+    <<: *common
+    container_name: cycle_diffusion_ffhq2anime
+    entrypoint: ["conda", "run", "--no-capture-output", "-n", "generative_prompt", "python", "translate_ffhq_to_anime.py"]
+
+  diagA:
+    <<: *common
+    container_name: cycle_diffusion_diagA
+    entrypoint: ["conda", "run", "--no-capture-output", "-n", "generative_prompt", "python"]
+
+  diagB:
+    <<: *common
+    container_name: cycle_diffusion_diagB
+    entrypoint: ["conda", "run", "--no-capture-output", "-n", "generative_prompt", "python"]

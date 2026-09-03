@@ -90,7 +90,21 @@ def prepare_ddpm_ddim(source_model_type, source_model_path):
             ]
         )
     else:
-        raise NotImplementedError()
+        # Generic/custom domain: any source_model_type not recognized above is
+        # treated as the name of a config file (ckpts/ddpm/configs/<source_model_type>.yml)
+        # for a user-supplied checkpoint. source_model_path is required, since there
+        # is no default location for a custom checkpoint.
+        assert source_model_path is not None, (
+            f"Unrecognized model type '{source_model_type}': treating it as a custom "
+            f"domain, which requires an explicit model path (and a matching "
+            f"ckpts/ddpm/configs/{source_model_type}.yml)."
+        )
+        ddim_args = parser.parse_args(
+            [
+                '--config', f'{source_model_type}.yml',
+                '--model_path', source_model_path,
+            ]
+        )
 
     # parse config file
     with open(os.path.join('ckpts/ddpm/configs', ddim_args.config), 'r') as f:
@@ -345,7 +359,8 @@ class DDPMDDIMWrapper(torch.nn.Module):
         betas = get_beta_schedule(
             beta_start=config.diffusion.beta_start,
             beta_end=config.diffusion.beta_end,
-            num_diffusion_timesteps=config.diffusion.num_diffusion_timesteps
+            num_diffusion_timesteps=config.diffusion.num_diffusion_timesteps,
+            beta_schedule=getattr(config.diffusion, "beta_schedule", "linear"),
         )
         self.register_buffer(
             'betas', torch.from_numpy(betas).float()
@@ -367,7 +382,7 @@ class DDPMDDIMWrapper(torch.nn.Module):
             else:
                 raise ValueError()
             print("Original diffusion Model loaded.")
-        elif config.data.dataset in ["FFHQ", "AFHQ", "IMAGENET"]:
+        elif config.data.dataset in ["FFHQ", "AFHQ", "IMAGENET", "CUSTOM_FACE256"]:
             self.generator = i_DDPM(config.data.dataset)
             self.learn_sigma = False
             self.logvar = np.log(np.maximum(posterior_variance, 1e-20))

@@ -1,0 +1,18 @@
+# Comparison variant of anime.yml with beta_schedule set to "linear" instead
+# of "cosine" -- same reasoning as ckpts/ddpm/configs/anime_aligned_linear.yml
+# (see that file and diagnostics/outputs/step_c3/training_config_consistency.md).
+# Added as a new file so anime.yml itself stays untouched pending approval of
+# the proposed fix in diagnostics/outputs/summary_report_stepC.md.
+#
+# Use with: --target_model_type anime_linear --target_model_path <path>
+
+data:
+    dataset: "CUSTOM_FACE256"
+    image_size: 256
+    channels: 3
+
+diffusion:
+    beta_schedule: "linear"
+    beta_start: 0.0001
+    beta_end: 0.02
+    num_diffusion_timesteps: 1000

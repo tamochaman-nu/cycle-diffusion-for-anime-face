@@ -1,0 +1,24 @@
+# Comparison variant of anime_aligned.yml with beta_schedule set to "linear"
+# instead of "cosine". Added (not editing anime_aligned.yml) because
+# diagnostics/outputs/step_c3/training_config_consistency.md found that
+# ~/improved-diffusion/run_train.sh used --noise_schedule linear for the
+# original anime checkpoint, and the SAME script (with OPENAI_LOGDIR changed
+# to /app/logs/anime-aligned, --noise_schedule left at "linear") was used to
+# train this aligned checkpoint too (confirmed by reading
+# ~/improved-diffusion/run_train.sh's current, uncommitted state -- same
+# caveat as before: hand-edited between runs without separate commits, so
+# this is strong circumstantial evidence, not a certain record).
+#
+# Use with: --target_model_type anime_aligned_linear --target_model_path <path>
+# or diagnostics scripts' --config/--source_model_type anime_aligned_linear.
+
+data:
+    dataset: "CUSTOM_FACE256"
+    image_size: 256
+    channels: 3
+
+diffusion:
+    beta_schedule: "linear"
+    beta_start: 0.0001
+    beta_end: 0.02
+    num_diffusion_timesteps: 1000

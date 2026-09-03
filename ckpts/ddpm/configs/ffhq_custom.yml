@@ -1,0 +1,27 @@
+# Custom source-domain config for a self-trained openai/improved-diffusion
+# checkpoint. Its state_dict does NOT match cycle-diffusion's built-in AFHQ_DICT
+# architecture (num_res_blocks=2, attention at 16x16 AND 8x8, plain conv up/down
+# sampling) -- reverse-engineered from the actual checkpoint and added as the
+# CUSTOM_FACE256 preset in
+# model/lib/ddpm_ddim/models/improved_ddpm/script_util.py (see i_DDPM()).
+# `data.dataset` below must stay "CUSTOM_FACE256" to select that preset; it does
+# not otherwise configure the network (the preset is fixed in script_util.py).
+#
+# Use with: --source_model_type ffhq_custom --source_model_path <path to your .pt>
+#
+# beta_schedule: set to "cosine" (openai/improved-diffusion's other common choice)
+# or "linear". A first real-photo test with "linear" produced diverging/garbage
+# output (sampled values blowing up over the last ~150 DDIM steps), which is the
+# classic symptom of a beta-schedule mismatch, so this defaults to "cosine" here.
+# If your checkpoint was in fact trained with the linear schedule, switch this back.
+
+data:
+    dataset: "CUSTOM_FACE256"
+    image_size: 256
+    channels: 3
+
+diffusion:
+    beta_schedule: "cosine"
+    beta_start: 0.0001  # unused when beta_schedule is "cosine"; kept for the linear fallback
+    beta_end: 0.02       # unused when beta_schedule is "cosine"; kept for the linear fallback
+    num_diffusion_timesteps: 1000
