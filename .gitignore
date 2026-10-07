@@ -151,4 +151,5 @@ ckpts/ddpm/*.pt
 diagnostics/outputs/*
 diagnostics/
 
-変更点.md
+# 詳細をまとめるためのmdを排除
+details/*.md
