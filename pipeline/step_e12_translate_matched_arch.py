@@ -110,6 +110,106 @@ def parse_args():
                               "is (downsample-then-upsample by this factor). Larger = weaker structural "
                               "constraint (more style freedom); smaller = stronger constraint (closer to "
                               "the source photo, less stylization). 1 disables filtering (full copy).")
+    # --- Method A: gradient-based structure guidance (see generic_ddpm_wrapper.py's
+    # _structure_guidance_correct docstring). Default OFF. Works in EITHER decode
+    # path, gated differently in each: in the default CycleDiffusion transcribed-
+    # eps path it can only ever apply during free (non-eps-injected) steps (see
+    # --target_free_tail_steps) -- found this session that this restricts it to
+    # LATE, low-noise steps, by which point macro-structure (hairstyle/silhouette)
+    # has already been decided by the earlier eps-injected steps, so it can only
+    # nudge local facial proportions, never silhouette/hairstyle. With
+    # --deterministic_inversion (no eps-injection at any step), it can also run
+    # during an EARLY calibration-phase window (see --structure_guidance_lambda),
+    # confirmed this session to be necessary for actually influencing hairstyle/
+    # silhouette, not just local proportions.
+    parser.add_argument("--structure_guidance_enabled", type=_str2bool, default=False,
+                         help="Default OFF. When True, nudges the sample via one gradient-descent step per "
+                              "guided step so its predicted-x0 moves towards the source photo structurally "
+                              "(exact comparison depends on --structure_guidance_loss). Devised because "
+                              "ILVR's low-frequency REPLACEMENT was found this session to only ever carry a "
+                              "coarse color/luminance map, never real facial geometry. Without "
+                              "--deterministic_inversion: only applies during free (non-eps-injected) steps, "
+                              "same as --ilvr_enabled -- raise --target_free_tail_steps for it to have steps "
+                              "to act on, but this session found that restricts it to adjusting local facial "
+                              "proportions only, never overall hairstyle/silhouette (those are decided too "
+                              "early in the trajectory for a late-only correction to reach). With "
+                              "--deterministic_inversion: ALSO runs during an early calibration-phase window "
+                              "(see --structure_guidance_lambda), which this session confirmed CAN influence "
+                              "hairstyle/silhouette. Costs one extra grad-enabled forward+backward pass "
+                              "through the generator per guided step (meaningfully slower than plain decode).")
+    parser.add_argument("--structure_guidance_scale", type=float, default=1.0,
+                         help="Per-step move distance for --structure_guidance_enabled, in x's own native "
+                              "[-1,1]-ish units (L2 norm over the whole image) -- the gradient is normalized "
+                              "to unit norm before being scaled by this value (see "
+                              "generic_ddpm_wrapper.py's _structure_guidance_correct), so this has a "
+                              "consistent meaning at every noise level, unlike raw (un-normalized) gradient "
+                              "scaling, which this session found unusable for early-step guidance (a scale "
+                              "that worked late in the trajectory caused total collapse when applied early, "
+                              "and thinning how often it applied did not help -- see "
+                              "--structure_guidance_every_n_steps). Values from before this normalization was "
+                              "added (e.g. hundreds to thousands) do NOT carry over -- this needs its own "
+                              "empirical calibration, still unvalidated at the default shown here.")
+    parser.add_argument("--structure_guidance_downsample_factor", type=int, default=8,
+                         help="Only used when --structure_guidance_enabled AND "
+                              "--structure_guidance_loss=pixel_high_freq. Defines the low/high frequency "
+                              "split point (same mechanics as --ilvr_downsample_factor, but for the HIGH-"
+                              "frequency residual x - low_pass(x, factor) that structure guidance matches, "
+                              "not the low-frequency content ILVR replaces). Smaller factor = the 'low' part "
+                              "removed is coarser, so more of the spectrum counts as 'high' and gets guided. "
+                              "Ignored (no effect, no error) when --structure_guidance_loss=dino_self_similarity.")
+    parser.add_argument("--structure_guidance_loss", type=str, default="pixel_high_freq",
+                         choices=["pixel_high_freq", "dino_self_similarity"],
+                         help="Which structure-guidance loss to use (see generic_ddpm_wrapper.py's "
+                              "_structure_guidance_correct docstring). Default 'pixel_high_freq' (the "
+                              "original Method A) -- found this session to produce a 'two images overlaid, "
+                              "opacity varying with scale' artifact, since matching raw (even high-pass-"
+                              "filtered) pixel values is mechanically a color copy/blend operation. "
+                              "'dino_self_similarity' (pipeline/dino_structure_guidance.py) compares DINO-ViT "
+                              "patch self-similarity instead -- appearance-invariant by construction, so its "
+                              "gradient cannot inject source color, only reshape what the target model draws. "
+                              "--structure_guidance_scale needs separate, unvalidated tuning for this loss "
+                              "(DINO self-similarity MSE values are on a completely different numeric scale "
+                              "than pixel MSE).")
+    parser.add_argument("--structure_guidance_lambda", type=float, default=0.55,
+                         help="Only used when --structure_guidance_enabled AND --deterministic_inversion. "
+                              "Fraction of decode steps left FREE (no structure guidance) at the end of "
+                              "decoding, same convention as --fbs_lambda/--pnp_lambda -- guidance applies "
+                              "during the first (1 - lambda) fraction of steps (the early, high-noise "
+                              "'calibration phase', where this session confirmed hairstyle/silhouette is "
+                              "still being decided), leaving the rest of the trajectory free for the target "
+                              "model's own stylization. Default 0.55 is an unvalidated starting point -- a "
+                              "quick check this session (lambda=0, i.e. ALL steps guided) successfully pulled "
+                              "hairstyle/silhouette/clothing color to match the source, but pushed the result "
+                              "notably more photo-realistic; the right balance between structural correction "
+                              "and retained stylization has not yet been tuned.")
+    parser.add_argument("--structure_guidance_window_start", type=float, default=0.0,
+                         help="Only used when --structure_guidance_enabled AND --deterministic_inversion. "
+                              "Fraction of decode steps to SKIP at the very start (highest noise) before "
+                              "structure guidance begins -- together with --structure_guidance_lambda (which "
+                              "sets where the window ENDS), this defines an arbitrary [window_start, "
+                              "1-lambda) guidance window instead of always starting at step 0. Default 0.0 "
+                              "preserves the original always-start-at-0 behavior. Added because guiding from "
+                              "the very highest noise steps (where x0_pred is least numerically reliable) was "
+                              "found this session to cause color-collapse/noise-explosion instability "
+                              "regardless of --structure_guidance_scale or --structure_guidance_every_n_steps "
+                              "-- skipping that region while still guiding a mid-trajectory window (where "
+                              "macro-structure such as hairstyle is hypothesized to actually solidify, per "
+                              "general diffusion-model coarse-to-fine behavior) may avoid the instability "
+                              "while still transferring structure. Unvalidated -- see "
+                              "diagnostics/step_j1_structure_guidance_window_sweep.py for a sweep over this "
+                              "and --structure_guidance_lambda together.")
+    parser.add_argument("--structure_guidance_every_n_steps", type=int, default=1,
+                         help="Only used when --structure_guidance_enabled AND --deterministic_inversion. "
+                              "Apply structure guidance only every Nth step within the early calibration "
+                              "window (see --structure_guidance_lambda) instead of every step. Default 1 "
+                              "(every step -- original behavior). Added to investigate whether the early-"
+                              "window guidance instability found this session (scale=1000, which worked well "
+                              "late in the trajectory, collapsed the whole image to a solid color when "
+                              "applied every step early; smaller scales avoided total collapse but still "
+                              "showed background artifacting) is partly caused by compounding a per-step "
+                              "correction whose gradient is unreliable at high noise levels -- thinning the "
+                              "number of interventions is the cheapest thing to try before more invasive "
+                              "fixes (gradient normalization, time-aware scaling).")
     # --- Task 4: deterministic DDIM inversion (see generic_ddpm_wrapper.py's
     # deterministic_invert docstring). Default OFF -- when False this whole
     # code path is untouched and source.encode() behaves exactly as before.
@@ -267,6 +367,24 @@ def validate_args(args):
         raise SystemExit(f"--pnp_strength must be in [0, 1], got {args.pnp_strength}")
     if not (0.0 <= args.region_color_strength <= 1.0):
         raise SystemExit(f"--region_color_strength must be in [0, 1], got {args.region_color_strength}")
+    if args.structure_guidance_scale < 0.0:
+        raise SystemExit(f"--structure_guidance_scale must be >= 0, got {args.structure_guidance_scale}")
+    if not (0.0 <= args.structure_guidance_lambda <= 1.0):
+        raise SystemExit(f"--structure_guidance_lambda must be in [0, 1], got {args.structure_guidance_lambda}")
+    if args.structure_guidance_every_n_steps < 1:
+        raise SystemExit(
+            f"--structure_guidance_every_n_steps must be >= 1, got {args.structure_guidance_every_n_steps}"
+        )
+    if not (0.0 <= args.structure_guidance_window_start <= 1.0):
+        raise SystemExit(
+            f"--structure_guidance_window_start must be in [0, 1], got {args.structure_guidance_window_start}"
+        )
+    if args.structure_guidance_window_start >= (1.0 - args.structure_guidance_lambda):
+        raise SystemExit(
+            f"--structure_guidance_window_start ({args.structure_guidance_window_start}) must be < "
+            f"1 - --structure_guidance_lambda ({1.0 - args.structure_guidance_lambda}) -- the guidance window "
+            f"[window_start, 1-lambda) would otherwise be empty or inverted."
+        )
 
 
 def resolve_output_dir(args):
@@ -289,6 +407,20 @@ def resolve_output_dir(args):
         tags.append(f"rcc{args.region_color_strength:g}")
     if args.remove_background:
         tags.append("nobg")
+    if args.structure_guidance_enabled:
+        if args.deterministic_inversion:
+            lam_tag = (
+                f"-ws{args.structure_guidance_window_start:g}-lam{args.structure_guidance_lambda:g}"
+                f"-n{args.structure_guidance_every_n_steps}"
+            )
+        else:
+            lam_tag = ""
+        if args.structure_guidance_loss == "dino_self_similarity":
+            tags.append(f"sg-dino-s{args.structure_guidance_scale:g}{lam_tag}")
+        else:
+            tags.append(
+                f"sg-N{args.structure_guidance_downsample_factor}-s{args.structure_guidance_scale:g}{lam_tag}"
+            )
     if not tags:
         return args.output_dir
     return args.output_dir.rstrip("/") + "_" + "_".join(tags)
@@ -315,7 +447,9 @@ def eta_for(sample_type, eta):
 
 
 def build_wrapper(args, prefix, model_path, sample_type, eta, free_tail_steps=1,
-                   ilvr_enabled=False, ilvr_downsample_factor=8):
+                   ilvr_enabled=False, ilvr_downsample_factor=8,
+                   structure_guidance_enabled=False, structure_guidance_scale=1000.0,
+                   structure_guidance_downsample_factor=8, structure_guidance_loss="pixel_high_freq"):
     def g(name):
         return getattr(args, f"{prefix}_{name}")
     arch_kwargs = dict(
@@ -334,6 +468,10 @@ def build_wrapper(args, prefix, model_path, sample_type, eta, free_tail_steps=1,
         eta=eta, t_0=args.t_0, refine_steps=args.refine_steps, free_tail_steps=free_tail_steps,
         ilvr_enabled=ilvr_enabled, ilvr_downsample_factor=ilvr_downsample_factor,
         allow_eta_zero=args.deterministic_inversion,
+        structure_guidance_enabled=structure_guidance_enabled,
+        structure_guidance_scale=structure_guidance_scale,
+        structure_guidance_downsample_factor=structure_guidance_downsample_factor,
+        structure_guidance_loss=structure_guidance_loss,
     )
 
 
@@ -346,10 +484,11 @@ def translate_one(source, target, img01, device, remove_bg=False):
     if remove_bg:
         low_res = remove_background(low_res, device)
     z = source.encode(low_res)
-    # ILVR reference must be in the model's native [-1,1] space (same convention
-    # encode() normalizes into via (image-0.5)*2) -- a no-op unless target.ilvr_enabled.
+    # ILVR/structure-guidance reference must be in the model's native [-1,1]
+    # space (same convention encode() normalizes into via (image-0.5)*2) --
+    # a no-op unless target.ilvr_enabled / target.structure_guidance_enabled.
     ilvr_reference = (low_res - 0.5) * 2.0
-    styled = target(z=z, ilvr_reference=ilvr_reference)
+    styled = target(z=z, ilvr_reference=ilvr_reference, structure_reference=ilvr_reference)
     return torch.clamp(styled, 0.0, 1.0).squeeze(0).cpu(), low_res.squeeze(0).cpu()
 
 
@@ -402,7 +541,7 @@ def translate_one_deterministic(source, target, img01, device, args, log):
             f"built on top of this reconstruction trajectory (Task 3's --fbs) is working from an unreliable "
             f"reference.")
 
-    if args.fbs == "off" and not args.pnp_enabled:
+    if args.fbs == "off" and not args.pnp_enabled and not args.structure_guidance_enabled:
         x_sample = x_T
         for t_i, t_next_i in decode_pairs:
             bsz = x_sample.shape[0]
@@ -436,8 +575,30 @@ def translate_one_deterministic(source, target, img01, device, args, log):
             f"lambda={args.pnp_lambda} strength={args.pnp_strength} -> injecting during the first "
             f"{pnp_calib_steps}/{len(decode_pairs)} decode steps")
 
+    # Structure guidance (Method A) needs only the static source photo, not a
+    # second decode trajectory -- unlike FBS/PnP it never reads x_recon2 -- so
+    # it's set up independently of the x_recon2 machinery below. Confirmed this
+    # session (see step_k3_dino_allfree_test): running it during this EARLY
+    # calibration window (not just the late "free" steps the non-deterministic
+    # path is restricted to) is what actually lets it influence macro-structure
+    # (hairstyle/silhouette), not just local facial proportions.
+    structure_reference = None
+    sg_window_start_steps = 0
+    sg_calib_steps = 0
+    if args.structure_guidance_enabled:
+        structure_reference = (low_res - 0.5) * 2.0
+        sg_window_start_steps = int(round(args.structure_guidance_window_start * len(decode_pairs)))
+        sg_calib_steps = int(round((1.0 - args.structure_guidance_lambda) * len(decode_pairs)))
+        n_guided = len(range(sg_window_start_steps, sg_calib_steps, args.structure_guidance_every_n_steps))
+        log(f"[translate_one_deterministic] structure guidance loss={args.structure_guidance_loss} "
+            f"scale={args.structure_guidance_scale} lambda={args.structure_guidance_lambda} "
+            f"window_start={args.structure_guidance_window_start} every_n_steps="
+            f"{args.structure_guidance_every_n_steps} -> guiding {n_guided} steps within "
+            f"[{sg_window_start_steps}, {sg_calib_steps})/{len(decode_pairs)}")
+
+    need_x_recon2 = args.fbs != "off" or args.pnp_enabled
     try:
-        x_recon2 = x_T.clone()
+        x_recon2 = x_T.clone() if need_x_recon2 else None
         x_sample = x_T.clone()
         warned_all_true = False
         for step_idx, (t_i, t_next_i) in enumerate(decode_pairs):
@@ -446,10 +607,14 @@ def translate_one_deterministic(source, target, img01, device, args, log):
             t_next = (torch.ones(bsz) * t_next_i).to(device)
             # Source's own forward pass here also feeds the injector's capture
             # hooks (a no-op if --pnp_enabled is False -- no hooks registered).
-            x_recon2 = source.decode_one_step(x_recon2, t, t_next, sampling_type="ddim", eta=0.0)
+            if need_x_recon2:
+                x_recon2 = source.decode_one_step(x_recon2, t, t_next, sampling_type="ddim", eta=0.0)
             if injector is not None:
                 injector.injection_enabled = step_idx < pnp_calib_steps
             x_sample = target.decode_one_step(x_sample, t, t_next)
+            if (args.structure_guidance_enabled and sg_window_start_steps <= step_idx < sg_calib_steps
+                    and (step_idx - sg_window_start_steps) % args.structure_guidance_every_n_steps == 0):
+                x_sample = target._structure_guidance_correct(x_sample, t_next, structure_reference)
             if args.fbs != "off" and step_idx < fbs_calib_steps:
                 # Anneal strength linearly from full at step 0 down to ~0 at the end of the
                 # calibration window, rather than holding it constant then cutting it off
@@ -557,6 +722,13 @@ def main():
     log(f"[step_e12] custom_steps={args.custom_steps} es_steps={args.es_steps} eta={args.eta} "
         f"refine_steps={args.refine_steps} target_free_tail_steps={args.target_free_tail_steps} "
         f"ilvr_enabled={args.ilvr_enabled} ilvr_downsample_factor={args.ilvr_downsample_factor} "
+        f"structure_guidance_enabled={args.structure_guidance_enabled} "
+        f"structure_guidance_scale={args.structure_guidance_scale} "
+        f"structure_guidance_downsample_factor={args.structure_guidance_downsample_factor} "
+        f"structure_guidance_loss={args.structure_guidance_loss} "
+        f"structure_guidance_lambda={args.structure_guidance_lambda} "
+        f"structure_guidance_window_start={args.structure_guidance_window_start} "
+        f"structure_guidance_every_n_steps={args.structure_guidance_every_n_steps} "
         f"deterministic_inversion={args.deterministic_inversion} inversion_steps={args.inversion_steps} "
         f"fbs={args.fbs} fbs_threshold={args.fbs_threshold} fbs_lambda={args.fbs_lambda} "
         f"pnp_enabled={args.pnp_enabled} pnp_feature_layers={args.pnp_feature_layers} pnp_lambda={args.pnp_lambda} "
@@ -576,6 +748,10 @@ def main():
         args, "target", args.target_model_path, args.target_sample_type,
         eta_for(args.target_sample_type, args.eta), free_tail_steps=args.target_free_tail_steps,
         ilvr_enabled=args.ilvr_enabled, ilvr_downsample_factor=args.ilvr_downsample_factor,
+        structure_guidance_enabled=args.structure_guidance_enabled,
+        structure_guidance_scale=args.structure_guidance_scale,
+        structure_guidance_downsample_factor=args.structure_guidance_downsample_factor,
+        structure_guidance_loss=args.structure_guidance_loss,
     ).to(device).eval()
 
     assert source.resolution == target.resolution

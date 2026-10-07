@@ -45,6 +45,7 @@ from model.gan_wrapper.ddpm_ddim_wrapper import (  # noqa: E402
 )
 from model.lib.ddpm_ddim.utils.diffusion_utils import denoising_step, get_beta_schedule, extract  # noqa: E402
 from pipeline import model_loader  # noqa: E402
+from pipeline import dino_structure_guidance  # noqa: E402
 
 
 class GenericDDPMWrapper(torch.nn.Module):
@@ -53,7 +54,9 @@ class GenericDDPMWrapper(torch.nn.Module):
                  sample_type, custom_steps, es_steps, eta=None, t_0=None,
                  refine_steps=0, refine_iterations=1, enforce_class_input=None,
                  strict_load=True, free_tail_steps=1,
-                 ilvr_enabled=False, ilvr_downsample_factor=8, allow_eta_zero=False):
+                 ilvr_enabled=False, ilvr_downsample_factor=8, allow_eta_zero=False,
+                 structure_guidance_enabled=False, structure_guidance_scale=1000.0,
+                 structure_guidance_downsample_factor=8, structure_guidance_loss="pixel_high_freq"):
         super().__init__()
         # ILVR (Choi et al., "ILVR: Conditioning Method for Denoising Diffusion
         # Probabilistic Models") low-frequency structure guidance -- OFF by
@@ -65,6 +68,33 @@ class GenericDDPMWrapper(torch.nn.Module):
         # since it's per-image data rather than wrapper configuration.
         self.ilvr_enabled = ilvr_enabled
         self.ilvr_downsample_factor = ilvr_downsample_factor
+        # Structure guidance ("Method A" from the post-ILVR/FBS/PnP investigation):
+        # unlike ILVR (which REPLACES x's low-frequency/color content with the
+        # source's) or FBSDiff/PnP (which replace DCT bands or U-Net features),
+        # this is a GRADIENT-based nudge on the HIGH-frequency residual
+        # (x0_pred - low_pass(x0_pred)) towards the source photo's own
+        # high-frequency residual -- edges/contours live in the high-frequency
+        # band by definition, which a low-pass replacement (ILVR) structurally
+        # cannot carry (confirmed this session: ILVR's "structure" transfer is
+        # really just a coarse color/luminance map, not real facial geometry).
+        # OFF by default; see _structure_guidance_correct below for the no-op
+        # guarantee when disabled.
+        self.structure_guidance_enabled = structure_guidance_enabled
+        self.structure_guidance_scale = structure_guidance_scale
+        self.structure_guidance_downsample_factor = structure_guidance_downsample_factor
+        # "pixel_high_freq" (original) was found this session to produce a
+        # "two images overlaid, opacity varying with scale" artifact: matching
+        # raw (even high-pass-filtered) pixel values is mechanically a soft
+        # color COPY/BLEND operation, whose gradient can literally inject
+        # source pixel content into x, fighting rather than reshaping whatever
+        # the target model is independently drawing. "dino_self_similarity"
+        # (see pipeline/dino_structure_guidance.py) compares DINO-ViT patch
+        # self-similarity instead -- appearance-invariant by construction, so
+        # its gradient has no channel through which raw source color can leak
+        # in; it can only push the model to reshape its OWN drawing so its
+        # patches relate to each other the way the source photo's do.
+        assert structure_guidance_loss in ("pixel_high_freq", "dino_self_similarity")
+        self.structure_guidance_loss = structure_guidance_loss
         self.enforce_class_input = enforce_class_input
         self.custom_steps = custom_steps
         self.refine_steps = refine_steps
@@ -94,6 +124,22 @@ class GenericDDPMWrapper(torch.nn.Module):
             print(f"[GenericDDPMWrapper] NOTE: ilvr_enabled=True with free_tail_steps={free_tail_steps} "
                   f"-- ILVR only applies during free (non-eps-injected) steps, so its effect will be "
                   f"minimal unless free_tail_steps is also raised.")
+        if structure_guidance_enabled and free_tail_steps < 20:
+            # Structure guidance is also restricted to free steps (see
+            # _structure_guidance_correct's call site) for the same reason ILVR
+            # is -- but do NOT assume free_tail_steps=1 makes it a near no-op the
+            # way the ILVR note above does: an empirical grid sweep this session
+            # found ILVR's free_tail_steps=1 was NOT close to a no-op (the single
+            # last-step correction, being unopposed by any later free step,
+            # dominated almost as much as free_tail_steps=500 did) -- structure
+            # guidance is a bounded gradient nudge rather than a full replace, so
+            # its scaling behavior may differ, but this has not been verified
+            # either way. Test empirically rather than assuming from this note.
+            print(f"[GenericDDPMWrapper] NOTE: structure_guidance_enabled=True with "
+                  f"free_tail_steps={free_tail_steps} -- structure guidance only applies during free "
+                  f"(non-eps-injected) steps. Whether its effect is minimal at small free_tail_steps is "
+                  f"NOT yet established empirically (unlike ILVR, where a small value was found to be far "
+                  f"from a no-op) -- verify with a real run rather than assuming.")
 
         if self.sample_type == "ddim":
             # Original CycleDiffusion encode()/generate() genuinely requires eta > 0
@@ -296,10 +342,114 @@ class GenericDDPMWrapper(torch.nn.Module):
         y_next = at_next.sqrt() * ilvr_reference + (1 - at_next).sqrt() * noise
         return x - self._ilvr_low_pass(x) + self._ilvr_low_pass(y_next)
 
+    def _structure_low_pass(self, x):
+        """Same mechanics as _ilvr_low_pass (area-downsample, bilinear-upsample)
+        but with its own independent factor (structure_guidance_downsample_factor),
+        kept as a separate method/parameter rather than reusing _ilvr_low_pass so
+        the two mechanisms stay fully independently toggleable/tunable."""
+        factor = self.structure_guidance_downsample_factor
+        if factor <= 1:
+            return x
+        h, w = x.shape[-2], x.shape[-1]
+        down = F.interpolate(x, size=(h // factor, w // factor), mode="area")
+        up = F.interpolate(down, size=(h, w), mode="bilinear", align_corners=False)
+        return up
+
+    def _structure_high_pass(self, x):
+        """High-frequency residual: x minus its own low-pass -- the complement
+        of _structure_low_pass's blur. Edges/contours live in this band; a
+        low-pass REPLACEMENT (ILVR's mechanism) structurally cannot carry them
+        (confirmed this session -- ILVR's "structure" transfer is really just a
+        coarse color/luminance map)."""
+        return x - self._structure_low_pass(x)
+
+    def _structure_guidance_correct(self, x, t_next, structure_reference):
+        """Method A (post-ILVR/FBS/PnP investigation): gradient-based
+        high-frequency structure guidance. Nudges x so that its predicted-x0's
+        high-frequency residual moves towards the source photo's own
+        high-frequency residual, via one gradient-descent step on an MSE loss.
+        Unlike _ilvr_correct, this never overwrites x directly -- it only ever
+        adds a bounded gradient step -- and it targets the high-frequency band
+        (edges/contours) rather than the low-frequency band (color/tone) ILVR
+        replaces. No-op unless structure_guidance_enabled and a reference was
+        supplied, so disabled is guaranteed to leave generate() bit-for-bit
+        unchanged. Needs one extra grad-enabled forward+backward pass through
+        the generator per call -- meaningfully more expensive per guided step
+        than ILVR/ the eps-injection steps, which is why callers should expect
+        to restrict this to a calibration-phase-style subset of steps (same
+        free_tail_steps gating ILVR uses -- see this method's call site)."""
+        if not self.structure_guidance_enabled or structure_reference is None:
+            return x
+        # AttentionBlock.forward uses gradient checkpointing (model/lib/ddpm_ddim/
+        # models/improved_ddpm/nn.py's CheckpointFunction) whose backward()
+        # unconditionally computes grad w.r.t. the checkpointed module's own
+        # parameters as an implementation detail -- it raises "does not require
+        # grad" if those parameters have requires_grad=False, which is how
+        # self.generator's params are frozen everywhere else in this class
+        # (pure-inference use, set in __init__). Flip requires_grad on for just
+        # this guided step's backward pass (no optimizer step ever reads these
+        # param grads -- only x_req's gradient is used below) and flip it back
+        # off immediately after, so every other code path (encode/
+        # decode_one_step/generate's eps-injected branch, etc.) keeps exactly
+        # its original frozen-parameter behavior.
+        params = list(self.generator.parameters())
+        for p in params:
+            p.requires_grad_(True)
+        try:
+            with torch.enable_grad():
+                x_req = x.detach().clone().requires_grad_(True)
+                if t_next.sum() == -t_next.shape[0]:  # t_next == -1: x IS x0 already, no model call needed
+                    x0_pred = x_req
+                else:
+                    et = self.generator(x_req, t_next)
+                    if et.shape != x_req.shape:
+                        et, _ = torch.split(et, et.shape[1] // 2, dim=1)
+                    at_next = extract(self.alphas_cumprod, t_next.long(), x_req.shape)
+                    x0_pred = (x_req - et * (1 - at_next).sqrt()) / at_next.sqrt()
+                if self.structure_guidance_loss == "dino_self_similarity":
+                    # DINO expects [0, 1] images; x0_pred/structure_reference are in
+                    # this class's native [-1, 1] space (same convention post_process
+                    # converts from). Clamping is fine here -- it's a no-op gradient
+                    # pass-through everywhere the prediction is already in-range, and
+                    # only saturates (zero local gradient) outside it, same as any
+                    # standard image-space clamp.
+                    pred01 = torch.clamp((x0_pred + 1.0) / 2.0, 0.0, 1.0)
+                    ref01 = torch.clamp((structure_reference + 1.0) / 2.0, 0.0, 1.0)
+                    loss = dino_structure_guidance.structure_guidance_loss(pred01, ref01, x_req.device)
+                else:
+                    loss = F.mse_loss(
+                        self._structure_high_pass(x0_pred), self._structure_high_pass(structure_reference)
+                    )
+                grad = torch.autograd.grad(loss, x_req)[0]
+        finally:
+            for p in params:
+                p.requires_grad_(False)
+        # Normalize the gradient (per-sample L2 norm over C,H,W) before scaling,
+        # rather than using its raw magnitude. Found this session that raw-
+        # gradient scaling is unusable for early-step (high-noise) guidance: a
+        # scale (1000) that worked well late in the trajectory collapsed the
+        # entire image to a solid color when applied early, and thinning how
+        # often it was applied (every 5/10/20 steps, down to 23 interventions
+        # total) did NOT prevent the same collapse -- ruling out "too many
+        # corrections compounding" and pointing instead to each individual
+        # raw gradient being disproportionately large at high noise (x0_pred's
+        # formula divides by sqrt(at_next), which is small/unstable when noise
+        # is high, so its gradient w.r.t. x can be arbitrarily larger there
+        # than late in the trajectory where sqrt(at_next) is close to 1).
+        # Normalizing makes `structure_guidance_scale` mean the same thing (a
+        # fixed per-step pixel-space move distance) at every noise level,
+        # which standard classifier/gradient-guidance practice also does.
+        # NOTE: this changes what `structure_guidance_scale` values from
+        # earlier in this session correspond to -- they need to be re-found
+        # from scratch under this scheme, not reused.
+        grad_norm = grad.flatten(1).norm(dim=1).clamp_min(1e-8).view(-1, *([1] * (grad.dim() - 1)))
+        grad_normalized = grad / grad_norm
+        return (x - self.structure_guidance_scale * grad_normalized).detach()
+
     # --- Copied verbatim (algorithm-wise) from DDPMDDIMWrapper.generate(),
     # plus the optional ILVR correction (see _ilvr_correct above; a no-op
     # when ilvr_enabled=False, which is the default). ---
-    def generate(self, z, class_label=None, ilvr_reference=None):
+    def generate(self, z, class_label=None, ilvr_reference=None, structure_reference=None):
         if self.enforce_class_input:
             assert class_label is not None
             raise NotImplementedError()
@@ -307,6 +457,10 @@ class GenericDDPMWrapper(torch.nn.Module):
             assert class_label is None
         if self.ilvr_enabled:
             assert ilvr_reference is not None, "ilvr_enabled=True requires generate()/forward() to receive ilvr_reference"
+        if self.structure_guidance_enabled:
+            assert structure_reference is not None, (
+                "structure_guidance_enabled=True requires generate()/forward() to receive structure_reference"
+            )
 
         if (self.t_0 + 1) % self.custom_steps == 0:
             seq_inv = range(0, self.t_0 + 1, (self.t_0 + 1) // self.custom_steps)
@@ -346,6 +500,7 @@ class GenericDDPMWrapper(torch.nn.Module):
                     sampling_type=self.sample_type, b=self.betas, eta=self.eta, learn_sigma=self.learn_sigma,
                 )
                 x = self._ilvr_correct(x, t_next, ilvr_reference)
+                x = self._structure_guidance_correct(x, t_next, structure_reference)
 
         if self.refine_steps == 0:
             img = x
@@ -366,12 +521,15 @@ class GenericDDPMWrapper(torch.nn.Module):
                         sampling_type=self.sample_type, b=self.betas, eta=refine_eta, learn_sigma=self.learn_sigma,
                     )
                     x = self._ilvr_correct(x, t_next, ilvr_reference)
+                    x = self._structure_guidance_correct(x, t_next, structure_reference)
             img = x
         return img
 
-    def forward(self, z, class_label=None, ilvr_reference=None):
+    def forward(self, z, class_label=None, ilvr_reference=None, structure_reference=None):
         self.generator.eval()
-        img = self.generate(z, class_label, ilvr_reference=ilvr_reference)
+        img = self.generate(
+            z, class_label, ilvr_reference=ilvr_reference, structure_reference=structure_reference,
+        )
         img = self.post_process(img)
         return img
 
