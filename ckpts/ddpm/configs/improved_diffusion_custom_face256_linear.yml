@@ -1,0 +1,39 @@
+# Linear-beta-schedule counterpart of improved_diffusion_custom_face256_cosine.yml
+# (see that file for the CUSTOM_FACE256 architecture background) -- added as a
+# separate file, rather than overwriting the cosine default, because
+# diagnostics/outputs/step_c3/training_config_consistency.md found that
+# ~/improved-diffusion/run_train.sh used --noise_schedule linear for several
+# of the original anime/anime-aligned checkpoints (hand-edited between runs
+# without separate commits, so this is strong circumstantial evidence, not a
+# certain record -- confirm against your own checkpoint's actual training
+# command before relying on this).
+#
+# Consolidated from the formerly-separate anime_linear.yml/
+# anime_aligned_linear.yml/ffhq_custom_linear.yml, which had identical data/
+# diffusion blocks -- model/gan_wrapper/ddpm_ddim_wrapper.py's
+# prepare_ddpm_ddim() now maps all of "anime_linear"/"anime_aligned_linear"/
+# "ffhq_custom_linear" (--source_model_type/--target_model_type) to this one
+# file instead of a per-name copy.
+
+data:
+    image_size: 256
+    channels: 3
+
+model:
+    num_channels: 256
+    num_res_blocks: 2
+    attention_resolutions: "32,16,8"
+    num_heads: 4
+    num_head_channels: -1
+    channel_mult: ""
+    dropout: 0.0
+    resblock_updown: false
+    use_scale_shift_norm: true
+    class_cond: false
+    learn_sigma: true
+
+diffusion:
+    beta_schedule: "linear"
+    beta_start: 0.0001
+    beta_end: 0.02
+    num_diffusion_timesteps: 1000

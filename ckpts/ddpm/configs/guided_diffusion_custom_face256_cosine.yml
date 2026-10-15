@@ -1,0 +1,65 @@
+# Source/target-domain config for the NEW self-trained openai/guided-diffusion
+# (not improved-diffusion) checkpoints documented in the "DDPM アーキテクチャ詳細
+# (guided-diffusion 実装)" writeup (/data3/takagi/guided-diffusion, ADM-style
+# UNetModel). Uses the same `model:`-section mechanism as
+# improved_diffusion_custom_face256_cosine.yml (see that file) --
+# model/gan_wrapper/ddpm_ddim_wrapper.py's DDPMDDIMWrapper.__init__ builds the
+# network directly via script_util.create_model(**config.model) instead of a
+# fixed dataset-name preset, so no code change was needed for this new
+# checkpoint family: this repo's existing
+# model/lib/ddpm_ddim/models/improved_ddpm/unet.py:UNetModel constructor
+# signature (image_size, num_res_blocks, attention_resolutions,
+# num_head_channels, use_scale_shift_norm, resblock_updown,
+# use_new_attention_order, ...) already matches the writeup's §2.1 table
+# field-for-field -- it IS the ADM/guided-diffusion-generation UNetModel,
+# just living under this repo's legacy "improved_ddpm" directory name. The
+# writeup's §4.4 note that guided-diffusion's attention was swapped for
+# F.scaled_dot_product_attention doesn't affect this: that's an internal
+# speed change in THEIR training repo, mathematically equivalent and
+# state_dict-shape-identical, so it has no bearing on loading the checkpoint
+# here.
+#
+# *** PLACEHOLDER VALUES -- UPDATE BEFORE USE ***
+# The writeup itself says training had not run yet when it was written ("学習
+# は未実施の段階で書いている") and that its own §11 per-checkpoint table
+# (image_size/num_channels/num_res_blocks/...) must be filled in from the
+# ACTUAL training run, since script_util.py's defaults, create_model()'s
+# function defaults, and this repo's docker-compose.yml defaults all disagree
+# with each other (writeup §10) -- none of them can be assumed correct here.
+# Everything below is copied from improved_diffusion_custom_face256_cosine.yml
+# (the most recent real trained pair, ckpts/ddpm/{anime,ffhq}-oneres-cosine-
+# 020000.pt) purely as a starting point/placeholder, NOT because it's known to
+# match the guided-diffusion run's actual training flags. Cross-check every
+# value in `model:` below against that run's own log.txt (writeup §9: "run_train.sh
+# の最終的な値は、各runのlog.txt冒頭で確認できる") before pointing this config
+# at a real guided-diffusion checkpoint -- a mismatch fails loudly as a
+# load_state_dict shape/key error (see improved_diffusion_custom_face256_cosine.yml's
+# own header for a worked example of that failure mode), not silently.
+#
+# beta_schedule: "cosine" per instruction (writeup confirms the cosine formula
+# in §6.1 matches get_named_beta_schedule's, and this repo's own
+# get_beta_schedule() cosine branch is the same standard Nichol&Dhariwal
+# formula already exercised by the improved-diffusion cosine config).
+
+data:
+    image_size: 256   # PLACEHOLDER -- confirm against the actual training run's --image_size (writeup §10 default is 64, almost certainly NOT what was used for a 256px face checkpoint)
+    channels: 3
+
+model:
+    num_channels: 256            # PLACEHOLDER -- confirm against --num_channels
+    num_res_blocks: 1            # PLACEHOLDER -- confirm against --num_res_blocks
+    attention_resolutions: "32,16,8"  # PLACEHOLDER -- confirm against --attention_resolutions
+    num_heads: 4                 # PLACEHOLDER -- confirm against --num_heads
+    num_head_channels: -1        # PLACEHOLDER -- confirm against --num_head_channels
+    channel_mult: ""             # PLACEHOLDER -- "" selects the writeup's §2.1 default table by image_size; set explicitly if the run overrode --channel_mult
+    dropout: 0.1                 # PLACEHOLDER -- confirm against --dropout (writeup §10 docker-compose.yml default is 0.1, not 0.0)
+    resblock_updown: false       # PLACEHOLDER -- confirm against --resblock_updown
+    use_scale_shift_norm: true   # PLACEHOLDER -- confirm against --use_scale_shift_norm
+    class_cond: false            # unconditional, per writeup §11 (anime/ffhq both False)
+    learn_sigma: true            # PLACEHOLDER -- confirm against --learn_sigma (writeup §6.4: LEARNED_RANGE means 6ch output; FIXED_LARGE if False means 3ch)
+
+diffusion:
+    beta_schedule: "cosine"
+    beta_start: 0.0001  # unused when beta_schedule is "cosine"; kept for a future linear variant
+    beta_end: 0.02       # unused when beta_schedule is "cosine"; kept for a future linear variant
+    num_diffusion_timesteps: 1000  # PLACEHOLDER -- confirm against --diffusion_steps

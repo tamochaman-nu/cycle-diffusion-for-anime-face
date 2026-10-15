@@ -1,0 +1,52 @@
+# Shared source/target-domain config for self-trained openai/improved-diffusion
+# 256px face checkpoints (ffhq_custom/anime/anime_aligned-era checkpoints, e.g.
+# ckpts/ddpm/ffhq400000.pt) whose state_dict does NOT match cycle-diffusion's
+# built-in AFHQ_DICT architecture (num_res_blocks=2, attention at 16x16 AND
+# 8x8, plain conv up/down sampling) -- reverse-engineered from the actual
+# checkpoints (all confirmed architecturally identical to each other) and
+# added as the CUSTOM_FACE256 preset in
+# model/lib/ddpm_ddim/models/improved_ddpm/script_util.py (see i_DDPM()).
+# `data.dataset` below must stay "CUSTOM_FACE256" to select that preset; it
+# does not otherwise configure the network (the preset is fixed in
+# script_util.py). NOT the architecture used by the later 256-channel
+# matched-arch checkpoints (anime_aligned_curated_*/ffhq_bgremoved_*/
+# ffhq512_*/oneres-cosine) -- those go through pipeline/
+# step_e12_translate_matched_arch.py's GenericDDPMWrapper instead, which has
+# no yml config of its own (architecture is passed via --*_arch_* CLI flags).
+#
+# Consolidated from the formerly-separate anime.yml/anime_aligned.yml/
+# ffhq_custom.yml, which had identical data/diffusion blocks -- model/
+# gan_wrapper/ddpm_ddim_wrapper.py's prepare_ddpm_ddim() now maps all of
+# "ffhq_custom"/"anime"/"anime_aligned" (--source_model_type/
+# --target_model_type) to this one file instead of a per-name copy.
+#
+# beta_schedule: "cosine" (openai/improved-diffusion's other common choice is
+# "linear" -- see improved_diffusion_custom_face256_linear.yml). A first
+# real-photo test with "linear" here produced diverging/garbage output
+# (sampled values blowing up over the last ~150 DDIM steps), the classic
+# symptom of a beta-schedule mismatch, so "cosine" is the default; use the
+# "_linear" model type if your checkpoint was in fact trained with the linear
+# schedule.
+
+data:
+    image_size: 256
+    channels: 3
+
+model:
+    num_channels: 256
+    num_res_blocks: 1
+    attention_resolutions: "32,16,8"
+    num_heads: 4
+    num_head_channels: -1
+    channel_mult: ""
+    dropout: 0.0
+    resblock_updown: false
+    use_scale_shift_norm: true
+    class_cond: false
+    learn_sigma: true
+
+diffusion:
+    beta_schedule: "cosine"
+    beta_start: 0.0001  # unused when beta_schedule is "cosine"; kept for the linear fallback
+    beta_end: 0.02       # unused when beta_schedule is "cosine"; kept for the linear fallback
+    num_diffusion_timesteps: 1000

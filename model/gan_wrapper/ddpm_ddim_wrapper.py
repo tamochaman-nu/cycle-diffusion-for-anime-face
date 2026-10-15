@@ -7,7 +7,7 @@ import torchvision.transforms as transforms
 import torch.nn.functional as F
 
 from ..lib.ddpm_ddim.models.ddpm.diffusion import DDPM
-from ..lib.ddpm_ddim.models.improved_ddpm.script_util import i_DDPM
+from ..lib.ddpm_ddim.models.improved_ddpm.script_util import i_DDPM, create_model
 from ..lib.ddpm_ddim.utils.diffusion_utils import (
     get_beta_schedule, denoising_step, extract
 )
@@ -89,6 +89,28 @@ def prepare_ddpm_ddim(source_model_type, source_model_path):
                 '--model_path', 'ckpts/ddpm/512x512_diffusion.pt',
             ]
         )
+    elif source_model_type in ('ffhq_custom', 'anime', 'anime_aligned'):
+        # These three model types all load a self-trained openai/improved-diffusion
+        # CUSTOM_FACE256 checkpoint with beta_schedule="cosine" -- formerly three
+        # byte-identical yml files (anime.yml/anime_aligned.yml/ffhq_custom.yml),
+        # now consolidated into one shared config (see that file's docstring).
+        assert source_model_path is not None
+        ddim_args = parser.parse_args(
+            [
+                '--config', 'improved_diffusion_custom_face256_cosine.yml',
+                '--model_path', source_model_path,
+            ]
+        )
+    elif source_model_type in ('ffhq_custom_linear', 'anime_linear', 'anime_aligned_linear'):
+        # Linear-beta-schedule counterpart of the group above -- formerly three
+        # byte-identical yml files, now consolidated the same way.
+        assert source_model_path is not None
+        ddim_args = parser.parse_args(
+            [
+                '--config', 'improved_diffusion_custom_face256_linear.yml',
+                '--model_path', source_model_path,
+            ]
+        )
     else:
         # Generic/custom domain: any source_model_type not recognized above is
         # treated as the name of a config file (ckpts/ddpm/configs/<source_model_type>.yml)
@@ -147,7 +169,6 @@ def denoising_step_with_eps(xt, eps, t, t_next, *,
         if et.shape != xt.shape:
             et, model_var_values = torch.split(et, et.shape[1] // 2, dim=1)
         if learn_sigma:
-            et, model_var_values = torch.split(et, et.shape[1] // 2, dim=1)
             # calculations for posterior q(x_{t-1} | x_t, x_0)
             bt = extract(b, t, xt.shape)
             at = extract((1.0 - b).cumprod(dim=0), t, xt.shape)  # at is the \hat{\alpha}_t (DDIM does not use \hat notation)
@@ -372,7 +393,18 @@ class DDPMDDIMWrapper(torch.nn.Module):
         alphas_cumprod = np.cumprod(alphas, axis=0)
         alphas_cumprod_prev = np.append(1.0, alphas_cumprod[:-1])
         posterior_variance = betas * (1.0 - alphas_cumprod_prev) / (1.0 - alphas_cumprod)
-        if config.data.dataset in ["CelebA_HQ", "LSUN"]:
+        if hasattr(config, "model") and not hasattr(config.data, "dataset"):
+            # Architecture given directly in the yml's `model:` section (see
+            # ckpts/ddpm/configs/improved_diffusion_custom_face256_*.yml) instead of
+            # a fixed dataset-name preset -- lets experiments change num_res_blocks
+            # etc. by editing the yml, with no script_util.py preset-dict edit.
+            # create_model() is the same function i_DDPM()'s presets call below,
+            # just with the kwargs coming from the yml instead of a hardcoded dict.
+            self.generator = create_model(image_size=config.data.image_size, **vars(config.model))
+            self.learn_sigma = config.model.learn_sigma
+            self.logvar = np.log(np.maximum(posterior_variance, 1e-20))
+            print("Improved diffusion Model loaded (architecture from yml `model:` section).")
+        elif config.data.dataset in ["CelebA_HQ", "LSUN"]:
             self.generator = DDPM(config)
             self.learn_sigma = False
             if config.model.var_type == "fixedlarge":

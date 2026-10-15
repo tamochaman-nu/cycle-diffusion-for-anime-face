@@ -28,6 +28,25 @@ Usage:
       --source_model_path ckpts/ddpm/ffhq512_080000.pt \\
       --target_model_path ckpts/ddpm/anime_aligned_curated_130000.pt \\
       --num_images 4
+
+Note on ckpts/ddpm/{anime,ffhq}-oneres-cosine-020000.pt: this later matched
+pair was trained with --num_res_blocks reduced from 2 to 1 (run_train.sh),
+and with --noise_schedule cosine instead of linear -- everything else
+(num_channels=256, attention_resolutions="32,16,8", learn_sigma=True) is
+unchanged, confirmed by inspecting the checkpoint tensors (time_embed.0.weight
+still (1024,256), out.2.weight still (6,256,3,3), input_blocks now span only
+indices 0-11 instead of 0-17, consistent with 1 resblock/stage instead of 2).
+The --*_arch_num_res_blocks default below (2) and --*_beta_schedule default
+("linear") intentionally still match the currently-flagship checkpoints
+(anime_aligned_curated_*/ffhq_bgremoved_*/ffhq512_*, all num_res_blocks=2,
+linear) -- flipping them would silently break those. Use this pair with
+explicit overrides instead:
+  python diagnostics/step_e12_translate_matched_arch.py \\
+      --source_model_path ckpts/ddpm/ffhq-oneres-cosine-020000.pt \\
+      --target_model_path ckpts/ddpm/anime-oneres-cosine-020000.pt \\
+      --source_arch_num_res_blocks 1 --target_arch_num_res_blocks 1 \\
+      --source_beta_schedule cosine --target_beta_schedule cosine \\
+      --num_images 4
 """
 import argparse
 import os
@@ -64,6 +83,11 @@ def add_arch_args(parser, prefix):
     parser.add_argument(f"{p}image_size", type=int, default=256)
     parser.add_argument(f"{p}channels", type=int, default=3)
     parser.add_argument(f"{p}arch_num_channels", type=int, default=256)
+    # Default 2 matches the flagship anime_aligned_curated_*/ffhq_bgremoved_*/
+    # ffhq512_* checkpoints. The newer oneres-cosine checkpoints (see module
+    # docstring) were trained with num_res_blocks=1 -- pass
+    # --{prefix}_arch_num_res_blocks 1 explicitly for those, don't flip this
+    # default (it would break the flagship checkpoints' default invocation).
     parser.add_argument(f"{p}arch_num_res_blocks", type=int, default=2)
     parser.add_argument(f"{p}arch_attention_resolutions", type=str, default="32,16,8")
     parser.add_argument(f"{p}arch_num_heads", type=int, default=4)
@@ -74,6 +98,10 @@ def add_arch_args(parser, prefix):
     parser.add_argument(f"{p}arch_use_scale_shift_norm", type=_str2bool, default=True)
     parser.add_argument(f"{p}arch_class_cond", type=_str2bool, default=False)
     parser.add_argument(f"{p}arch_learn_sigma", type=_str2bool, default=True)
+    # Default "linear" matches the flagship checkpoints too; the oneres
+    # checkpoints were trained with --noise_schedule cosine (same reasoning
+    # as the num_res_blocks default above -- pass --{prefix}_beta_schedule
+    # cosine explicitly instead of changing this default).
     parser.add_argument(f"{p}beta_schedule", type=str, default="linear", choices=["linear", "cosine"])
     parser.add_argument(f"{p}beta_start", type=float, default=0.0001)
     parser.add_argument(f"{p}beta_end", type=float, default=0.02)
