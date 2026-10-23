@@ -1,0 +1,36 @@
+# 128-channel counterpart of guided_diffusion_mp_face256_cosine.yml (see that
+# file for the EDM2 MPUNetModel / arch="mp" background), for
+# ckpts/ddpm/{anime,ffhq}-mp-100000-128-ema09995.pt.
+#
+# Per the checkpoint author, the main change from the 64-channel run is
+# NUM_CHANNELS 64 -> 128 (EMA_RATE 0.9995 per the filename, which doesn't
+# affect inference). Inspecting the checkpoints' tensors agrees: same 226
+# keys as anime-mp-100000.pt, with every width doubled (enc.256x256_conv
+# 64 -> 128, out_conv input 64 -> 128, emb_noise (256,64) -> (512,128)).
+# num_head_channels is NOT recoverable from the tensor shapes (it only sets
+# how attn_qkv's output is split into heads), so it's assumed unchanged at 64
+# -- i.e. this model has twice as many heads per attention layer as the
+# 64-channel one. Revisit if the 128 run also changed NUM_HEAD_CHANNELS.
+
+data:
+    image_size: 256
+    channels: 3
+
+model:
+    num_channels: 128
+    num_res_blocks: 2
+    attention_resolutions: "32,16,8"
+    num_heads: 4
+    num_head_channels: 64
+    channel_mult: ""
+    dropout: 0.1
+    class_cond: false
+    learn_sigma: true
+    arch: "mp"
+    mp_clip_act: 256
+
+diffusion:
+    beta_schedule: "cosine"
+    beta_start: 0.0001  # unused when beta_schedule is "cosine"; kept for a future linear variant
+    beta_end: 0.02       # unused when beta_schedule is "cosine"; kept for a future linear variant
+    num_diffusion_timesteps: 1000

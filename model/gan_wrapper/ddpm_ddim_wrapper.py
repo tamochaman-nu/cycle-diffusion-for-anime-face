@@ -400,7 +400,12 @@ class DDPMDDIMWrapper(torch.nn.Module):
             # etc. by editing the yml, with no script_util.py preset-dict edit.
             # create_model() is the same function i_DDPM()'s presets call below,
             # just with the kwargs coming from the yml instead of a hardcoded dict.
-            self.generator = create_model(image_size=config.data.image_size, **vars(config.model))
+            self.generator = create_model(
+                image_size=config.data.image_size,
+                diffusion_steps=config.diffusion.num_diffusion_timesteps,
+                noise_schedule=config.diffusion.beta_schedule,
+                **vars(config.model),
+            )
             self.learn_sigma = config.model.learn_sigma
             self.logvar = np.log(np.maximum(posterior_variance, 1e-20))
             print("Improved diffusion Model loaded (architecture from yml `model:` section).")

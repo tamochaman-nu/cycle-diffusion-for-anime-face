@@ -46,11 +46,11 @@ data:
     channels: 3
 
 model:
-    num_channels: 256            # PLACEHOLDER -- confirm against --num_channels
-    num_res_blocks: 1            # PLACEHOLDER -- confirm against --num_res_blocks
+    num_channels: 64            # PLACEHOLDER -- confirm against --num_channels
+    num_res_blocks: 2            # PLACEHOLDER -- confirm against --num_res_blocks
     attention_resolutions: "32,16,8"  # PLACEHOLDER -- confirm against --attention_resolutions
     num_heads: 4                 # PLACEHOLDER -- confirm against --num_heads
-    num_head_channels: -1        # PLACEHOLDER -- confirm against --num_head_channels
+    num_head_channels: 64        # PLACEHOLDER -- confirm against --num_head_channels
     channel_mult: ""             # PLACEHOLDER -- "" selects the writeup's §2.1 default table by image_size; set explicitly if the run overrode --channel_mult
     dropout: 0.1                 # PLACEHOLDER -- confirm against --dropout (writeup §10 docker-compose.yml default is 0.1, not 0.0)
     resblock_updown: false       # PLACEHOLDER -- confirm against --resblock_updown

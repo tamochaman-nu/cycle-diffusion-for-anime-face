@@ -356,7 +356,7 @@ def parse_args():
                               "whether background content is contributing to incorrect contour transfer, "
                               "independent of --pnp_enabled/--fbs/--ilvr_enabled (works with any of them).")
     parser.add_argument("--t_0", type=int, default=None)
-    parser.add_argument("--image_dir", type=str, default=os.path.join(_REPO_ROOT, "data/ffhq"))
+    parser.add_argument("--image_dir", type=str, default=os.path.join(_REPO_ROOT, "data/input"))
     parser.add_argument("--image_paths", type=str, nargs="+", default=None)
     parser.add_argument("--num_images", type=int, default=4)
     parser.add_argument("--seed", type=int, default=0)

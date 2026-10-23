@@ -19,15 +19,10 @@
 # /workspace/cycle-diffusion-for-anime-face, so ckpts/, diagnostics/outputs/,
 # and any --output path under the repo are visible on the host immediately.
 #
-# Dataset mounts (host WSL2 paths under /mnt/d/takagi/ffhq_anime/, layered on
-# top of the repo bind mount above -- more specific mounts win, so these
-# shadow any same-named dirs under ./data/ in the repo itself, which
-# currently has none):
-#   ./data/ffhq  <- /mnt/d/takagi/ffhq_anime/ffhq512x512
-#                   (flat *.png, ~70k files, e.g. data/ffhq/00001.png)
-#   ./data/anime <- /mnt/d/takagi/ffhq_anime/highresolution-anime-face-dataset-512x512
-#                   (*.jpg under a portraits/ subfolder, ~302k files, e.g.
-#                   data/anime/portraits/10000310.jpg)
+# Input dataset mount: the single directory of source photos to translate
+# (e.g. ffhq512x512 or ffhq512x512-bg-removed), set via $INPUT_DATA_DIR in
+# .env (see .env.example) and mounted at ./data/input. Required -- compose
+# refuses to start without it rather than silently mounting a wrong path.
 
 x-common: &common
   build:
@@ -36,8 +31,7 @@ x-common: &common
   image: cycle-diffusion-for-anime-face:latest
   volumes:
     - .:/workspace/cycle-diffusion-for-anime-face
-    - /mnt/d/takagi/ffhq_anime/ffhq512x512:/workspace/cycle-diffusion-for-anime-face/data/ffhq
-    - /mnt/d/takagi/ffhq_anime/highresolution-anime-face-dataset-512x512:/workspace/cycle-diffusion-for-anime-face/data/anime
+    - ${INPUT_DATA_DIR:?set INPUT_DATA_DIR in .env (see .env.example)}:/workspace/cycle-diffusion-for-anime-face/data/input
   working_dir: /workspace/cycle-diffusion-for-anime-face
   deploy:
     resources:

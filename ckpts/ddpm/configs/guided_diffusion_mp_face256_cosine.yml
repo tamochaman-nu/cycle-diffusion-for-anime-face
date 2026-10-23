@@ -1,0 +1,52 @@
+# Source/target-domain config for ckpts/ddpm/{anime,ffhq}-mp-100000.pt --
+# EDM2 "magnitude-preserving" U-Net (model/lib/ddpm_ddim/models/improved_ddpm/
+# unet_mp.py:MPUNetModel), NOT the ADM UNetModel that
+# guided_diffusion_custom_face256_cosine.yml (and the improved_diffusion_*
+# configs) assume. Despite the "-mp-" checkpoints coming from the same forked
+# training repo (github.com/tamochaman-nu/guided-diffusion, branch
+# dev/detect-resblock-overflow) as that ADM-oriented config's writeup, its
+# docker-compose.yml trains with ARCH=mp: an entirely different network (EDM2,
+# Karras et al. 2024) with a different state_dict key layout (emb_fourier.*,
+# enc.<res>_block*.conv_res0/1, attn_qkv/attn_proj, out_gain, no biases at
+# all) -- confirmed by directly inspecting ckpts/ddpm/anime-mp-100000.pt's
+# tensor keys. Loading it via a UNetModel-based config fails immediately on
+# the first key.
+#
+# Values below are NOT placeholders -- they're copied directly from that
+# training repo's docker-compose.yml x-train-params (the actual settings used
+# for the anime-mp/ffhq-mp training runs, TRAIN_LOGDIR: /app/logs/{anime,ffhq}-mp,
+# LR_ANNEAL_STEPS: 100000 matching the "-100000" in the checkpoint filenames):
+#   IMAGE_SIZE=256 NUM_CHANNELS=64 NUM_RES_BLOCKS=2 NUM_HEADS=4
+#   NUM_HEAD_CHANNELS=64 ATTENTION_RESOLUTIONS=32,16,8 DROPOUT=0.1
+#   LEARN_SIGMA=True CLASS_COND=False DIFFUSION_STEPS=1000 NOISE_SCHEDULE=cosine
+#   ARCH=mp MP_CLIP_ACT=256
+# USE_SCALE_SHIFT_NORM/RESBLOCK_UPDOWN/USE_NEW_ATTENTION_ORDER are also set in
+# that docker-compose.yml but are ADM-only knobs -- script_util.py's arch="mp"
+# branch (and MPUNetModel itself) doesn't accept them, so they're correctly
+# left out of `model:` below. USE_FP16=False/USE_BF16=True there is a
+# training-time-only setting; MPUNetModel defaults to fp32 activations when
+# neither flag is passed, which is what we want for inference here (weights
+# are fp32 either way -- MPUNetModel.fp32_master_weights).
+
+data:
+    image_size: 256
+    channels: 3
+
+model:
+    num_channels: 64
+    num_res_blocks: 2
+    attention_resolutions: "32,16,8"
+    num_heads: 4
+    num_head_channels: 64
+    channel_mult: ""
+    dropout: 0.1
+    class_cond: false
+    learn_sigma: true
+    arch: "mp"
+    mp_clip_act: 256
+
+diffusion:
+    beta_schedule: "cosine"
+    beta_start: 0.0001  # unused when beta_schedule is "cosine"; kept for a future linear variant
+    beta_end: 0.02       # unused when beta_schedule is "cosine"; kept for a future linear variant
+    num_diffusion_timesteps: 1000
