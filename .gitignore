@@ -153,3 +153,5 @@ diagnostics/
 
 # 詳細をまとめるためのmdを排除
 details/*.md
+
+*.Identifier
