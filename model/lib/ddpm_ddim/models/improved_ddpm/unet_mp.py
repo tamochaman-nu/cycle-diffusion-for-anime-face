@@ -16,13 +16,19 @@
 # cosine attention, and box-filter resampling via avg_pool2d / nearest
 # interpolation.
 #
-# Only change made here: get_named_beta_schedule(noise_schedule, diffusion_steps)
-# (that repo's guided_diffusion/gaussian_diffusion.py) is replaced with this
-# repo's equivalent, get_beta_schedule(...) (model/lib/ddpm_ddim/utils/
-# diffusion_utils.py) -- same cosine/linear formulas (see that function's own
-# comment), just a different module layout and explicit beta_start/beta_end
-# args (0.0001/0.02, matching get_named_beta_schedule's own linear-schedule
-# values at diffusion_steps=1000).
+# Changes made here:
+#   - get_named_beta_schedule(noise_schedule, diffusion_steps) (that repo's
+#     guided_diffusion/gaussian_diffusion.py) is replaced with this repo's
+#     equivalent, get_beta_schedule(...) (model/lib/ddpm_ddim/utils/
+#     diffusion_utils.py) -- same cosine/linear formulas (see that function's
+#     own comment), just a different module layout and explicit
+#     beta_start/beta_end args (0.0001/0.02, matching get_named_beta_schedule's
+#     own linear-schedule values at diffusion_steps=1000).
+#   - MPBlock.attn_hook: an optional inference-time callback that can replace
+#     the (normalized) q/k/v of a block's self-attention, used by
+#     pipeline/styleid.py for StyleID-style K/V injection. None by default
+#     (and not part of the state_dict), so behavior and checkpoints are
+#     unchanged unless a caller sets it.
 
 """
 Magnitude-preserving U-Net (EDM2, "Analyzing and Improving the Training Dynamics
@@ -167,6 +173,9 @@ class MPBlock(nn.Module):
             self.attn_proj = MPConv(out_channels, out_channels, kernel=[1, 1])
         else:
             self.attn_qkv = self.attn_proj = None
+        # Optional (block, q, k, v) -> (q, k, v), each [n, heads, c, hw]; see
+        # the header note and pipeline/styleid.py.
+        self.attn_hook = None
 
     def forward(self, x, emb):
         if self.use_checkpoint and self.training and th.is_grad_enabled():
@@ -201,6 +210,8 @@ class MPBlock(nn.Module):
             y = self.attn_qkv(x)
             y = y.reshape(n, self.num_heads, -1, 3, h * w)
             q, k, v = normalize(y, dim=2).unbind(3)  # each [n, heads, c, hw]
+            if self.attn_hook is not None:
+                q, k, v = self.attn_hook(self, q, k, v)
             y = F.scaled_dot_product_attention(
                 q.transpose(-1, -2), k.transpose(-1, -2), v.transpose(-1, -2)
             ).transpose(-1, -2)
